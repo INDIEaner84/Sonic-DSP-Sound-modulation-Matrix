@@ -1,8 +1,9 @@
-# Probleme, Befunde und Entscheidungen (Wellen 2–5)
+# Probleme, Befunde und Entscheidungen (Wellen 2–6)
 
 Stand: Branch `arena/63e00fdc-sonic-dsp-sound-modulation-mat`, Basis `7afa23b`.
-Bezug: `docs/PLAN-WELLE-2-3.md` (P2.1–P2.6, P3.1–P3.3, P4.1–P4.3) und
-`docs/PLAN-WELLE-4-5.md` (P4.1–P4.5, P5.1–P5.3).
+Bezug: `docs/PLAN-WELLE-2-3.md` (P2.1–P2.6, P3.1–P3.3, P4.1–P4.3),
+`docs/PLAN-WELLE-4-5.md` (P4.1–P4.5, P5.1–P5.3) und
+`docs/PLAN-WELLE-6.md` (P6.1–P6.5).
 Dieses Dokument hält fest, **was entschieden wurde, warum, mit welcher Folge** und
 **was noch offen oder nur teilweise geprüft ist**.
 
@@ -107,8 +108,8 @@ der Server bleibt `require`-basiert und dependency-frei. `npm start` ist unverä
 
 | Prüfung | Kommando | Ergebnis |
 | --- | --- | --- |
-| Unit-/Integrationstests | `npm test` | **100/100** |
-| inkl. UI (jsdom) | `npm run test:ui` | **119/119** |
+| Unit-/Integrationstests | `npm test` | **116/116** |
+| inkl. UI (jsdom) | `npm run test:ui` | **138/138** |
 | Syntax aller Module | `node --check js/*.js` | fehlerfrei |
 | Server-Smoke | `node server.cjs` + `curl /` | 200, korrekte Content-Types |
 | Browser-Verhalten (Klang, Layout) | manuell | **nicht** automatisiert prüfbar (jsdom ohne Canvas/Audio) |
@@ -148,6 +149,10 @@ blockiert). WAV-Bounce und Spur-Effekte = **B** (bewusst zurückgestellt).
    Effekte und Velocity-Kurven über Controller gehen verloren (dokumentiert).
 5. **Kein Push möglich, falls das Remote-Token fehlt** — dann bleibt der Stand lokal
    committet (siehe Abschlussbericht).
+6. **Web MIDI** ist nur im Browser prüfbar (Berechtigung, Geräteliste). Ohne Zugriff bleibt
+   das Panel bei „AUS“; Tastatur, Pads, Aufnahme und Export sind davon unberührt.
+7. **Klavier/Drums sind synthetisch**: ein sample-basiertes Instrument (SF2/`smplr`) ist der
+   nächste sinnvolle Schritt, braucht aber Assets und eine Lizenzentscheidung (Kategorie C).
 
 ## Entscheidungen Welle 4 + 5
 
@@ -245,3 +250,89 @@ er ist isoliert, klein und ohne Folgen für Aufnahme, Speichern oder MIDI abscha
 | P5.1 WAV-Encoder | umgesetzt, getestet (Header, Interleaving, Clamping, Fehlerfälle) |
 | P5.2 Recorder | umgesetzt, Encoder-Pfad und Fehlerfälle getestet; **Browser-Teil manuell zu prüfen** |
 | P5.3 UI-Knopf „Mix ⤓ WAV" | umgesetzt, UI-getestet (Fehlerpfad ohne MediaRecorder) |
+
+## Entscheidungen Welle 6
+
+### E-17 — Instrument ist eine Spur-Eigenschaft
+
+`track.instrument` ist `'synth' | 'piano' | 'drums'`; der Patch bleibt bei allen Typen
+gespeichert. Die Engine wählt beim `noteOn` die Stimmenklasse über diese Eigenschaft.
+
+**Folge:** Umschalten ist verlustfrei (der Patch bleibt), MIDI-Export, Aufnahme, Mute/Solo
+und Effekte gelten unverändert für alle Instrumente. Ein Spur-Instrument ist keine zweite
+Wahrheitsquelle neben dem Patch, sondern eine Auswahl, welche Stimme ihn nutzt.
+
+### E-18 — Klavier synthetisch statt Sample-Instrument
+
+`PianoVoice`: fünf verstimmte Sinus-Partiale, Hammer-Rauschimpuls, velocity-abhängiges
+Tiefpassfilter, exponentielles Ausklingen (tiefe Lagen länger). Alles über
+AudioParam-Automation, ohne Control-Rate-Ticks.
+
+**Begründung:** „VST" im engeren Sinn ist im Browser nicht möglich; ein Sample-Klavier
+bräuchte Assets + Lizenzfreigabe (Kategorie C). Die synthetische Stimme ist offline
+lauffähig, deterministisch testbar und klingt für Skizzen brauchbar.
+
+**Grenze:** kein echtes Konzertflügel-Sample; ein SF2-/SoundFont-Paket kann später als
+zweiter Instrumenttyp daneben treten, ohne diesen zu ersetzen.
+
+### E-19 — Drum-Kit synthetisch mit GM-Belegung
+
+Acht Ein-Schuss-Stimmen (Kick, Snare, Clap, Hat zu/offen, Tom, Rim, Crash), Notennummern
+nach General-MIDI: 36, 38, 39, 42, 46, 45, 37, 49. Unbekannte Noten fallen auf die
+geschlossene Hat zurück, damit ein Controller-Pad nie stumm bleibt.
+
+**Folge:** Pads, Tastatur und MIDI sprechen dieselben Noten; die Belegung ist eine
+projektweite Kit-Definition (`DRUM_KIT` in `js/state.js`), kein Kit-Wechsel pro Spur.
+
+### E-20 — Web MIDI als dünne Schicht plus testbarer Router
+
+`js/midi-input.js` trennt drei Dinge: `parseMidiMessage` (Bytes → Ereignis),
+`createMidiRouter` (Ereignis → Noten-/CC-Aktion inkl. Learn) und `openMidiAccess`
+(Browser-Zugriff, Geräteliste, Zustandswechsel). Nur der letzte Teil braucht einen Browser.
+
+**Folge:** Parser, Routing, Learn und Fehlerpfade sind in Node vollständig getestet; übrig
+bleibt die Berechtigungsabfrage, die nur im Browser beurteilbar ist.
+
+### E-21 — CC-Bindungen liegen im Projekt, mit Kanal und Omni
+
+`project.midi.binds[]` enthält `{cc, channel, target}`; `channel: 0` bedeutet alle Kanäle.
+15 Ziele: Master, Mod-Wheel, FX-Werte, Pegel/Sends der aktiven Spur, Play/Stop/Play-Stop/
+Record, Loop leeren, Panic. Numerische Ziele laufen über `applyControl()` (eine Stelle für
+Bereiche und Log-Kurven), Transportziele über Aktionen in `main.js` mit Flankenerkennung
+(CC ≥ 0.5 und vorher < 0.5), damit ein Tastendruck nicht doppelt feuert.
+
+**Folge:** Bindungen wandern mit der Projektdatei, sind versioniert und validiert
+(CC 0…127, Kanal 0…16, Ziel aus der Liste, maximal 32 Bindungen). Doppelte CC/Kanal-Kombination:
+letzte Bindung gilt, mit Warnung.
+
+### E-22 — Keine geratenen Nektar-CC-Nummern
+
+Der Nektar Impact sendet Pads als Noten (typisch Kanal 10) und Transport-/Mixer-Tasten je
+nach Modell und Firmware mit unterschiedlichen CC-Nummern. Deshalb gibt es **keine**
+fest eingebaute Belegtabelle, sondern Learn + MIDI-Monitor (`CH 1 · CC 74 · Wert 96`).
+
+**Folge:** „Programmieren" heißt: Ziel im Panel wählen, „CC anlernen", Taste am Gerät
+drücken. Das ist ehrlicher als eine Tabelle, die bei anderer Firmware falsch wäre, und
+funktioniert für jedes andere Gerät genauso.
+
+### E-23 — Schema v3 in der Migrationskette
+
+`migrate()` arbeitet jetzt als Kette: v1 → v2 (Sends/FX) → v3 (Instrument, MIDI-Bindings).
+Jeder Schritt ist additiv und einzeln getestet.
+
+## Befunde Welle 6
+
+| Nr. | Befund | Beleg | Behandlung |
+| --- | --- | --- | --- |
+| B-08 | Testannahme, kein App-Fehler: `dataset.instrument` sitzt am Pad-Raster (`.pads`), nicht am Container `#pads` | UI-Test „Instrument je Spur umschalten" | Test auf das tatsächliche Element korrigiert |
+| B-09 | Testannahme, kein App-Fehler: nach dem MIDI-Import enthält die erste Spur bereits zwei Noten; die Pad-Aufnahme muss als Differenz geprüft werden | UI-Test „Pads spielen Noten …" | Test misst `+1` statt Absolutwert |
+
+## Status Welle 6
+
+| Paket | Status |
+| --- | --- |
+| P6.1 Schema v3 + Migration | vollständig abgenommen |
+| P6.2 Piano-/Drum-Stimmen | vollständig abgenommen (Engine-Tests) |
+| P6.3 MIDI-Parser/Router/Learn | vollständig abgenommen (Node-Tests); Browser-Zugriff manuell |
+| P6.4 UI (Instrument, Pads, MIDI-Panel) | umgesetzt, UI-getestet |
+| P6.5 Doku | fertig |

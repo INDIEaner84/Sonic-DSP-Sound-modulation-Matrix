@@ -286,6 +286,47 @@
               <div class="knobs env-knobs" id="knobsModEnv"></div>
             </div>
           </section>
+
+          <section class="panel panel-pads">
+            <div class="panel-head">
+              <h2>Pads</h2>
+              <span class="tag" id="padTag">DRUMS</span>
+            </div>
+            <div class="panel-body">
+              <div id="pads"></div>
+              <p class="hint">
+                Pad = Note 36–49 der aktiven Spur · Instrument „DRUMS“ spielt das Kit ·
+                MIDI-Noten schlagen dieselben Pads an
+              </p>
+            </div>
+          </section>
+
+          <section class="panel panel-midi">
+            <div class="panel-head">
+              <h2>MIDI In</h2>
+              <div class="panel-actions">
+                <span class="tag" id="midiStatus">AUS</span>
+                <button class="btn ghost" id="midiConnectBtn" type="button">Verbinden</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="midi-devices" id="midiDevices"></div>
+              <div class="midi-learn">
+                <label class="midi-learn-label">
+                  <span>LERNEN</span>
+                  <select id="midiTarget" class="mini-select" aria-label="MIDI-Ziel"></select>
+                </label>
+                <button class="btn ghost" id="midiLearnBtn" type="button" disabled>CC anlernen</button>
+              </div>
+              <div class="midi-binds" id="midiBinds"></div>
+              <div class="midi-monitor" id="midiMonitor">noch keine Nachricht</div>
+              <p class="hint">
+                Noten spielen die aktive Spur · CCs steuern die gewählten Ziele ·
+                Nektar Impact: Pads senden Noten (Kanal 10), Transporttasten per
+                „CC anlernen“ selbst belegen
+              </p>
+            </div>
+          </section>
         </div>
       </main>
 

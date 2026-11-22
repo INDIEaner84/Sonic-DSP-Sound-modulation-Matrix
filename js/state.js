@@ -286,3 +286,15 @@ export const PRESETS = [
     },
   },
 ];
+
+/** Pad-Belegung des Drum-Kits; Notennummern folgen der GM-Schlagzeug-Belegung. */
+export const DRUM_KIT = [
+  { note: 36, id: 'kick', label: 'KICK' },
+  { note: 38, id: 'snare', label: 'SNR' },
+  { note: 39, id: 'clap', label: 'CLAP' },
+  { note: 42, id: 'hatClosed', label: 'HAT C' },
+  { note: 46, id: 'hatOpen', label: 'HAT O' },
+  { note: 45, id: 'tomLow', label: 'TOM L' },
+  { note: 37, id: 'rim', label: 'RIM' },
+  { note: 49, id: 'crash', label: 'CRASH' },
+];

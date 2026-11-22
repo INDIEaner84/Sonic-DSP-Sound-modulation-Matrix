@@ -20,6 +20,10 @@ import {
   FX_DEFAULTS,
   DELAY_DIVISIONS,
   delaySeconds,
+  applyControl,
+  isNumericTarget,
+  MIDI_TARGETS,
+  INSTRUMENTS,
   PPQ,
 } from '../js/project.js';
 import { buildPatch } from '../js/state.js';
@@ -98,9 +102,11 @@ test('Version 1 wird migriert und mit Defaults ergänzt', () => {
   const result = deserialize(JSON.stringify(raw));
   assert(result.ok, result.errors.join(' | '));
   eq(result.migratedFrom, 1);
-  eq(result.project.version, 2);
+  eq(result.project.version, 3);
   eq(result.project.fx.delayDivision, '1/8');
   eq(result.project.tracks[0].sends.delay, SEND_DEFAULTS.delay);
+  eq(result.project.tracks[0].instrument, 'synth');
+  eq(result.project.midi.binds, []);
   assert(result.warnings.some((w) => w.includes('Projektversion 1')), result.warnings.join(' | '));
 });
 
@@ -282,4 +288,95 @@ test('delaySeconds rechnet Raster über das Tempo', () => {
   eq(delaySeconds(project), 1.5);
   project.fx.delayDivision = 'unbekannt';
   eq(delaySeconds(project), 0.5, 'unbekanntes Raster fällt auf 1/8 zurück');
+});
+
+/* ------------------------------------------------- Instrumente & MIDI (v3) */
+
+test('Instrumente werden validiert und serialisiert', () => {
+  const drums = createTrack({ name: 'Drums', instrument: 'drums' });
+  const piano = createTrack({ name: 'Keys', instrument: 'piano' });
+  const project = createProject({ tracks: [drums, piano], activeTrackId: drums.id });
+  const back = deserialize(JSON.stringify(serialize(project)));
+  assert(back.ok, back.errors.join(' | '));
+  eq(back.project.tracks.map((t) => t.instrument), ['drums', 'piano']);
+
+  const raw = serialize(project);
+  raw.tracks[0].instrument = 'theremin';
+  const bad = validateProject(raw);
+  assert(!bad.ok);
+  assert(bad.errors.join(' ').includes('instrument'), bad.errors.join(' | '));
+
+  const missing = serialize(project);
+  delete missing.tracks[0].instrument;
+  const defaults = validateProject(missing);
+  assert(defaults.ok, defaults.errors.join(' | '));
+  eq(defaults.project.tracks[0].instrument, 'synth', 'fehlendes Instrument → synth');
+});
+
+test('MIDI-Bindungen werden geprüft', () => {
+  const base = () => serialize(sampleProject());
+
+  const ok = base();
+  ok.midi = { binds: [{ cc: 7, channel: 1, target: 'master' }, { cc: 74, channel: 0, target: 'fx.delayTone' }] };
+  const good = validateProject(ok);
+  assert(good.ok, good.errors.join(' | '));
+  eq(good.project.midi.binds.length, 2);
+  eq(good.project.midi.binds[1].channel, 0);
+
+  const bad = base();
+  bad.midi = {
+    binds: [
+      { cc: 200, channel: 1, target: 'master' },
+      { cc: 7, channel: 99, target: 'master' },
+      { cc: 8, channel: 1, target: 'gibtsnicht' },
+    ],
+  };
+  const badResult = validateProject(bad);
+  assert(!badResult.ok);
+  const all = badResult.errors.join(' | ');
+  assert(all.includes('cc'), all);
+  assert(all.includes('channel'), all);
+  assert(all.includes('gibtsnicht'), all);
+
+  const dup = base();
+  dup.midi = { binds: [{ cc: 7, channel: 0, target: 'master' }, { cc: 7, channel: 0, target: 'modWheel' }] };
+  const dupResult = validateProject(dup);
+  assert(dupResult.ok, dupResult.errors.join(' | '));
+  assert(dupResult.warnings.some((w) => w.includes('doppelt')), dupResult.warnings.join(' | '));
+  eq(dupResult.project.midi.binds.length, 2);
+
+  const tooMany = base();
+  tooMany.midi = { binds: Array.from({ length: LIMITS.maxMidiBinds + 1 }, (_, i) => ({ cc: i, channel: 0, target: 'master' })) };
+  assert(!validateProject(tooMany).ok);
+});
+
+test('applyControl rechnet CC-Werte auf Ziele', () => {
+  const project = sampleProject();
+  const master = applyControl(project, 'master', 0.5);
+  assert(master.ok);
+  eq(project.master, 0.5);
+
+  applyControl(project, 'fx.delayFeedback', 1);
+  eq(project.fx.delayFeedback, LIMITS.maxDelayFeedback);
+  applyControl(project, 'fx.delayFeedback', 0);
+  eq(project.fx.delayFeedback, 0);
+
+  applyControl(project, 'fx.delayTone', 0);
+  eq(project.fx.delayTone, LIMITS.minDelayTone);
+  applyControl(project, 'fx.delayTone', 1);
+  eq(project.fx.delayTone, LIMITS.maxDelayTone);
+  const mid = applyControl(project, 'fx.delayTone', 0.5).value;
+  assert(mid > LIMITS.minDelayTone && mid < LIMITS.maxDelayTone, 'log-Kurve liegt dazwischen');
+  assert(Math.abs(mid - (LIMITS.minDelayTone + LIMITS.maxDelayTone) / 2) > 100, 'log ≠ linear');
+
+  const active = activeTrackOf(project);
+  applyControl(project, 'track.gain', 1);
+  eq(active.gain, LIMITS.maxGain);
+  applyControl(project, 'track.sendReverb', 0.25);
+  eq(active.sends.reverb, 0.25);
+
+  eq(applyControl(project, 'gibtsnicht', 0.5).ok, false);
+  eq(isNumericTarget('transport.play'), false);
+  eq(isNumericTarget('master'), true);
+  assert(applyControl(project, 'master', 5).value === 1, 'Werte über 1 werden geklemmt');
 });

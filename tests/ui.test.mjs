@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, eq, assert, setFile, near } from './harness.mjs';
 import { FakeAudioContext, stopTimer } from './support/fake-audio.mjs';
-import { STORAGE_KEY, DELAY_DIVISIONS, delaySeconds } from '../js/project.js';
+import { STORAGE_KEY, DELAY_DIVISIONS, delaySeconds, PROJECT_VERSION, INSTRUMENTS } from '../js/project.js';
 import { PRESETS } from '../js/state.js';
 
 setFile('ui');
@@ -247,7 +247,7 @@ if (!JSDOM) {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     assert(raw, 'kein Autosave-Eintrag');
     const parsed = JSON.parse(raw);
-    eq(parsed.version, 2);
+    eq(parsed.version, PROJECT_VERSION);
     eq(parsed.fx.delayDivision, project.fx.delayDivision);
     eq(parsed.tracks[0].sends.reverb, 0.42);
     eq(parsed.name, 'Mein Song');
@@ -320,6 +320,54 @@ if (!JSDOM) {
     del.click();
     await wait(10);
     eq(project.tracks.length, 1);
+  });
+
+  test('Instrument je Spur umschalten (Synth/Piano/Drums)', async () => {
+    const row = q('.track-row')[0];
+    const select = row.querySelector('.track-instrument-select');
+    assert(select, 'Instrument-Auswahl fehlt');
+    eq(select.options.length, INSTRUMENTS.length);
+    eq(select.value, project.tracks[0].instrument);
+    select.value = 'drums';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await wait(10);
+    eq(project.tracks[0].instrument, 'drums');
+    eq(doc.getElementById('padTag').textContent, 'DRUMS');
+    eq(doc.querySelector('.pads').dataset.instrument, 'drums');
+  });
+
+  test('Pads spielen Noten der aktiven Spur und werden aufgezeichnet', async () => {
+    const pad = doc.querySelectorAll('.pad')[0];
+    assert(pad, 'Pad fehlt');
+    const note = Number(pad.dataset.note);
+    eq(note, 36, 'erstes Pad ist die Kick');
+    doc.getElementById('recBtn').click();
+    await wait(20);
+    if (clock._timer) {
+      clearInterval(clock._timer);
+      clock._timer = null;
+    }
+    engine.ctx.currentTime = clock.loopStart + 0.01;
+    const before = project.tracks[0].clip.count;
+    pad.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true, cancelable: true }));
+    await wait(30);
+    eq(project.tracks[0].clip.count, before + 1, 'Pad-Schlag wurde nicht aufgenommen');
+    clock.stop();
+    await wait(10);
+    clock.clearClip();
+    await wait(10);
+  });
+
+  test('MIDI-Panel zeigt Zustand, Learn bleibt ohne Verbindung gesperrt', async () => {
+    eq(doc.getElementById('midiStatus').textContent.length > 0, true);
+    assert(doc.getElementById('midiLearnBtn').disabled, 'Learn muss ohne Verbindung gesperrt sein');
+    eq(doc.getElementById('midiTarget').options.length, 15);
+    assert(doc.getElementById('midiBinds').textContent.includes('keine Bindung'));
+    doc.getElementById('midiConnectBtn').click();
+    await wait(30);
+    const toast = doc.getElementById('toast').textContent;
+    assert(toast.includes('MIDI') || toast.includes('nicht unterstützt'), 'Toast: ' + toast);
+    eq(doc.getElementById('midiStatus').textContent, 'AUS');
   });
 
   test('Mix-Export meldet fehlende Browser-Unterstützung statt zu werfen', async () => {

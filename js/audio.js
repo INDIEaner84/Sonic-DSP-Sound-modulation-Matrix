@@ -8,7 +8,7 @@
  * exakter Startzeit (`when`) geplant werden – das nutzt der Sequencer.
  */
 
-import { SOURCES, DESTS, clamp, mulberry32 } from './state.js';
+import { SOURCES, DESTS, clamp, mulberry32, DRUM_KIT } from './state.js';
 import { trackAudible, delaySeconds, FX_DEFAULTS } from './project.js';
 
 const TWO_PI = Math.PI * 2;
@@ -152,6 +152,7 @@ class Voice {
     this.engine = engine;
     this.chain = chain;
     this.track = chain.track;
+    this.kind = 'synth';
     const ctx = engine.ctx;
     const s = this.track.patch;
 
@@ -318,6 +319,303 @@ class Voice {
           /* ignore */
         }
       });
+    }, 60);
+  }
+}
+
+
+/* -------------------------------------------------------- Piano-Instrument */
+
+/**
+ * Klavierähnliche Stimme: fünf verstimmte Sinus-Partiale durch ein
+ * velocity-abhängiges Tiefpassfilter, kurzer Hammer-Noise, exponentielles
+ * Ausklingen mit längeren Tails in der Tiefe. Alles über AudioParam-Automation,
+ * damit die Stimme ohne Control-Rate-Ticks auskommt.
+ */
+const PIANO_PARTIALS = [
+  { mul: 1, gain: 0.5, detune: -4 },
+  { mul: 1, gain: 0.4, detune: 5 },
+  { mul: 2, gain: 0.18, detune: 2 },
+  { mul: 3.01, gain: 0.08, detune: -3 },
+  { mul: 4.02, gain: 0.05, detune: 1 },
+];
+
+class PianoVoice {
+  constructor(engine, chain, note, velocity, when) {
+    this.engine = engine;
+    this.chain = chain;
+    this.track = chain.track;
+    this.kind = 'piano';
+    this.note = note;
+    this.velocity = clamp(velocity, 0.05, 1);
+
+    const ctx = engine.ctx;
+    const t0 = Math.max(when != null ? when : ctx.currentTime, ctx.currentTime);
+    this.startAt = t0;
+    this.triggered = true;
+    this.released = false;
+    this.dead = false;
+    this.releaseAt = null;
+
+    const freq = midiToHz(note);
+    this.out = ctx.createGain();
+    this.out.gain.value = 0;
+    this.filter = ctx.createBiquadFilter();
+    this.filter.type = 'lowpass';
+    this.filter.frequency.value = clamp(900 + this.velocity * 5200 + (note - 48) * 30, 700, 12000);
+    this.filter.Q.value = 0.7;
+    this.filter.connect(this.out);
+    this.out.connect(chain.input);
+
+    this.nodes = [];
+    for (const partial of PIANO_PARTIALS) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq * partial.mul, t0);
+      osc.detune.setValueAtTime(partial.detune, t0);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(partial.gain, t0);
+      osc.connect(g);
+      g.connect(this.filter);
+      osc.start(t0);
+      this.nodes.push(osc, g);
+    }
+
+    /* Hammer-Anschlag: kurzer Rauschimpuls, macht den Einsatz perkussiv. */
+    const hammer = createSource(ctx, 'noise', engine);
+    const hammerFilter = ctx.createBiquadFilter();
+    hammerFilter.type = 'bandpass';
+    hammerFilter.frequency.value = 2400 + this.velocity * 1600;
+    hammerFilter.Q.value = 0.8;
+    const hammerGain = ctx.createGain();
+    hammerGain.gain.setValueAtTime(0.0001, t0);
+    hammerGain.gain.linearRampToValueAtTime(0.1 * this.velocity, t0 + 0.002);
+    hammerGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.06);
+    hammer.connect(hammerFilter);
+    hammerFilter.connect(hammerGain);
+    hammerGain.connect(this.out);
+    hammer.start(t0);
+    hammer.stop(t0 + 0.12);
+    this.nodes.push(hammer, hammerFilter, hammerGain);
+
+    const decay = clamp(3.6 * Math.pow(2, -(note - 60) / 22), 0.6, 5.5);
+    this.endAt = t0 + decay + 0.5;
+    this.out.gain.setValueAtTime(0.0001, t0);
+    this.out.gain.linearRampToValueAtTime(0.85 * (0.25 + 0.75 * this.velocity), t0 + 0.006);
+    this.out.gain.exponentialRampToValueAtTime(0.0006, t0 + decay);
+  }
+
+  _applyRelease(at) {
+    if (this.releaseAt != null) return;
+    const t = Math.max(at, this.startAt + 0.01);
+    this.releaseAt = t;
+    try {
+      this.out.gain.cancelScheduledValues(t);
+      this.out.gain.setTargetAtTime(0.0001, t, 0.07);
+    } catch (e) {
+      /* ignore */
+    }
+    this.endAt = Math.min(this.endAt, t + 0.45);
+  }
+
+  release(at) {
+    this._applyRelease(at);
+  }
+
+  scheduleRelease(at) {
+    this._applyRelease(at);
+  }
+
+  tick(now) {
+    if (this.releaseAt != null && now >= this.releaseAt) this.released = true;
+    if (now >= this.endAt) {
+      this.dead = true;
+      this.released = true;
+    }
+  }
+
+  dispose() {
+    const ctx = this.engine.ctx;
+    const t = ctx.currentTime;
+    for (const node of this.nodes) {
+      if (typeof node.stop === 'function') {
+        try {
+          node.stop(t + 0.02);
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    }
+    setTimeout(() => {
+      for (const node of [...this.nodes, this.filter, this.out]) {
+        try {
+          node.disconnect();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    }, 60);
+  }
+}
+
+/* ---------------------------------------------------------- Schlagzeug-Kit */
+
+export { DRUM_KIT };
+
+export function drumForNote(note) {
+  return DRUM_KIT.find((pad) => pad.note === note) || DRUM_KIT.find((pad) => pad.id === 'hatClosed');
+}
+
+/**
+ * Ein-Schuss-Stimme für ein Drum-Pad. Aufbau mit nativer Hüllkurve: `release`
+ * ist bewusst wirkungslos, die Stimme endet, wenn ihr Ausklang vorbei ist.
+ */
+class DrumVoice {
+  constructor(engine, chain, note, velocity, when) {
+    this.engine = engine;
+    this.chain = chain;
+    this.track = chain.track;
+    this.kind = 'drums';
+    this.note = note;
+    this.velocity = clamp(velocity, 0.05, 1);
+    this.pad = drumForNote(note);
+
+    const ctx = engine.ctx;
+    const t0 = Math.max(when != null ? when : ctx.currentTime, ctx.currentTime);
+    this.startAt = t0;
+    this.triggered = true;
+    this.released = false;
+    this.dead = false;
+    this.nodes = [];
+
+    this.out = ctx.createGain();
+    this.out.gain.value = 1;
+    this.out.connect(chain.input);
+
+    const v = this.velocity;
+    const env = (param, peak, decay) => {
+      param.setValueAtTime(0.0001, t0);
+      param.linearRampToValueAtTime(Math.max(0.0002, peak), t0 + 0.002);
+      param.exponentialRampToValueAtTime(0.0001, t0 + decay);
+    };
+    const noise = (filterType, frequency, q, peak, decay) => {
+      const src = createSource(ctx, 'noise', engine);
+      const filter = ctx.createBiquadFilter();
+      filter.type = filterType;
+      filter.frequency.value = frequency;
+      filter.Q.value = q;
+      const g = ctx.createGain();
+      env(g.gain, peak, decay);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(this.out);
+      src.start(t0);
+      src.stop(t0 + decay + 0.05);
+      this.nodes.push(src, filter, g);
+      return g;
+    };
+    const tone = (type, from, to, peak, decay, sweep = 0.12) => {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.setValueAtTime(from, t0);
+      if (to !== from) osc.frequency.exponentialRampToValueAtTime(to, t0 + sweep);
+      const g = ctx.createGain();
+      env(g.gain, peak, decay);
+      osc.connect(g);
+      g.connect(this.out);
+      osc.start(t0);
+      osc.stop(t0 + decay + 0.05);
+      this.nodes.push(osc, g);
+      return g;
+    };
+
+    let length = 0.5;
+    switch (this.pad.id) {
+      case 'kick':
+        tone('sine', 170, 46, 0.95 * v, 0.45);
+        noise('highpass', 1800, 0.7, 0.12 * v, 0.02);
+        length = 0.5;
+        break;
+      case 'snare':
+        noise('bandpass', 1900, 0.9, 0.6 * v, 0.17);
+        tone('triangle', 190, 165, 0.35 * v, 0.1, 0.08);
+        length = 0.25;
+        break;
+      case 'clap': {
+        const g = noise('bandpass', 1400, 1.2, 0.45 * v, 0.24);
+        for (let i = 1; i < 3; i++) {
+          g.gain.setValueAtTime(0.0001, t0 + i * 0.012);
+          g.gain.linearRampToValueAtTime(0.45 * v, t0 + i * 0.012 + 0.002);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.012 + 0.09);
+        }
+        length = 0.3;
+        break;
+      }
+      case 'hatClosed':
+        noise('highpass', 7800, 0.6, 0.42 * v, 0.055);
+        length = 0.1;
+        break;
+      case 'hatOpen':
+        noise('highpass', 6600, 0.6, 0.34 * v, 0.4);
+        length = 0.45;
+        break;
+      case 'tomLow':
+        tone('sine', 130, 78, 0.7 * v, 0.3);
+        noise('bandpass', 900, 0.8, 0.1 * v, 0.05);
+        length = 0.35;
+        break;
+      case 'rim':
+        tone('square', 1600, 1600, 0.3 * v, 0.035);
+        noise('bandpass', 2600, 1.5, 0.2 * v, 0.03);
+        length = 0.08;
+        break;
+      case 'crash':
+        noise('highpass', 4400, 0.5, 0.3 * v, 1.3);
+        noise('bandpass', 7200, 0.8, 0.12 * v, 0.9);
+        length = 1.4;
+        break;
+      default:
+        noise('highpass', 7000, 0.6, 0.3 * v, 0.06);
+        length = 0.12;
+    }
+    this.endAt = t0 + length;
+  }
+
+  release() {
+    /* Ein-Schuss: kein Ausschalten durch Note-Off. */
+  }
+
+  scheduleRelease() {
+    /* ignorieren – das Pad klingt aus. */
+  }
+
+  tick(now) {
+    if (now >= this.endAt) {
+      this.dead = true;
+      this.released = true;
+    }
+  }
+
+  dispose() {
+    const ctx = this.engine.ctx;
+    const t = ctx.currentTime;
+    for (const node of this.nodes) {
+      if (typeof node.stop === 'function') {
+        try {
+          node.stop(t + 0.02);
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    }
+    setTimeout(() => {
+      for (const node of [...this.nodes, this.out]) {
+        try {
+          node.disconnect();
+        } catch (e) {
+          /* ignore */
+        }
+      }
     }, 60);
   }
 }
@@ -625,7 +923,12 @@ export class Engine {
       }
     }
     this._steal(at);
-    const voice = new Voice(this, chain, note, velocity, at);
+    const VoiceClass = chain.track.instrument === 'piano'
+      ? PianoVoice
+      : chain.track.instrument === 'drums'
+        ? DrumVoice
+        : Voice;
+    const voice = new VoiceClass(this, chain, note, velocity, at);
     this.voices.add(voice);
     return voice;
   }
@@ -671,6 +974,7 @@ export class Engine {
   refreshVoices(trackId = null) {
     for (const v of this.voices) {
       if (trackId && v.track.id !== trackId) continue;
+      if (v.kind !== 'synth') continue;
       const s = v.track.patch;
       if (v.src1.type) v.src1.type = s.osc1.wave;
       if (v.src2.type) v.src2.type = s.osc2.wave;

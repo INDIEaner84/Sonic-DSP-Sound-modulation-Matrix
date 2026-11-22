@@ -7,10 +7,142 @@
 import { Clip } from './clip.js';
 import { buildPatch, getIn, PATCH_RANGES, PATCH_ENUMS, SOURCES, DESTS, DEFAULT_PATCH } from './state.js';
 
-export const PROJECT_VERSION = 2;
+export const PROJECT_VERSION = 3;
 
 /** Versionen, die beim Laden übernommen werden (ältere werden migriert). */
-export const SUPPORTED_VERSIONS = [1, 2];
+export const SUPPORTED_VERSIONS = [1, 2, 3];
+
+/** Instrumenttypen einer Spur. `synth` nutzt den Patch, `piano`/`drums` eigene Stimmen. */
+export const INSTRUMENTS = [
+  { id: 'synth', label: 'SYNTH' },
+  { id: 'piano', label: 'PIANO' },
+  { id: 'drums', label: 'DRUMS' },
+];
+const INSTRUMENT_IDS = INSTRUMENTS.map((i) => i.id);
+
+/**
+ * Ziele für MIDI-CC-Bindungen. Spurbezogene Ziele wirken auf die aktive Spur,
+ * Transportziele werden von der App ausgeführt (siehe `NUMERIC_TARGETS`).
+ */
+export const MIDI_TARGETS = [
+  'master',
+  'modWheel',
+  'fx.delayFeedback',
+  'fx.delayTone',
+  'fx.reverbSize',
+  'fx.reverbDamp',
+  'track.gain',
+  'track.sendDelay',
+  'track.sendReverb',
+  'transport.play',
+  'transport.stop',
+  'transport.toggle',
+  'transport.record',
+  'clip.clear',
+  'panic',
+];
+
+export const MIDI_TARGET_LABELS = {
+  master: 'Master',
+  modWheel: 'Mod-Wheel',
+  'fx.delayFeedback': 'Delay Feedback',
+  'fx.delayTone': 'Delay Tone',
+  'fx.reverbSize': 'Reverb Größe',
+  'fx.reverbDamp': 'Reverb Damp',
+  'track.gain': 'Spur-Pegel (aktiv)',
+  'track.sendDelay': 'Delay-Send (aktiv)',
+  'track.sendReverb': 'Reverb-Send (aktiv)',
+  'transport.play': 'Play',
+  'transport.stop': 'Stop',
+  'transport.toggle': 'Play/Stop',
+  'transport.record': 'Record',
+  'clip.clear': 'Loop leeren',
+  panic: 'Panic',
+};
+
+/** Ziele, die einen Zahlenwert 0…1 aus einem CC übernehmen. */
+const NUMERIC_TARGETS = {
+  master: { get: (p) => p.master, set: (p, v) => (p.master = v), min: 0, max: 1 },
+  modWheel: { get: (p) => p.modWheel, set: (p, v) => (p.modWheel = v), min: 0, max: 1 },
+  'fx.delayFeedback': {
+    get: (p) => p.fx.delayFeedback,
+    set: (p, v) => (p.fx.delayFeedback = v),
+    min: 0,
+    max: 0.85,
+  },
+  'fx.delayTone': {
+    get: (p) => p.fx.delayTone,
+    set: (p, v) => (p.fx.delayTone = v),
+    min: 300,
+    max: 9000,
+    curve: 'log',
+  },
+  'fx.reverbSize': {
+    get: (p) => p.fx.reverbSize,
+    set: (p, v) => (p.fx.reverbSize = v),
+    min: 0.3,
+    max: 8,
+  },
+  'fx.reverbDamp': {
+    get: (p) => p.fx.reverbDamp,
+    set: (p, v) => (p.fx.reverbDamp = v),
+    min: 0,
+    max: 1,
+  },
+  'track.gain': {
+    get: (p) => (activeTrackOf(p) ? activeTrackOf(p).gain : 0),
+    set: (p, v) => {
+      const t = activeTrackOf(p);
+      if (t) t.gain = v;
+    },
+    min: 0,
+    max: 1.5,
+  },
+  'track.sendDelay': {
+    get: (p) => {
+      const t = activeTrackOf(p);
+      return t ? t.sends.delay : 0;
+    },
+    set: (p, v) => {
+      const t = activeTrackOf(p);
+      if (t) t.sends.delay = v;
+    },
+    min: 0,
+    max: 1,
+  },
+  'track.sendReverb': {
+    get: (p) => {
+      const t = activeTrackOf(p);
+      return t ? t.sends.reverb : 0;
+    },
+    set: (p, v) => {
+      const t = activeTrackOf(p);
+      if (t) t.sends.reverb = v;
+    },
+    min: 0,
+    max: 1,
+  },
+};
+
+export function isNumericTarget(target) {
+  return Object.prototype.hasOwnProperty.call(NUMERIC_TARGETS, target);
+}
+
+/**
+ * Wendet einen Controller-Wert (0…1) auf ein numerisches Ziel an.
+ * @returns {{ok: boolean, value?: number, target?: string}}
+ */
+export function applyControl(project, target, amount01) {
+  const def = NUMERIC_TARGETS[target];
+  if (!def) return { ok: false };
+  const a = typeof amount01 === 'number' && Number.isFinite(amount01) ? Math.min(1, Math.max(0, amount01)) : 0;
+  const value =
+    def.curve === 'log'
+      ? def.min * Math.pow(def.max / def.min, a)
+      : def.min + (def.max - def.min) * a;
+  def.set(project, value);
+  return { ok: true, value, target };
+}
 
 /** Schema-2-Felder für die Migration aus Version 1. */
 export const SEND_DEFAULTS = { delay: 0.12, reverb: 0.18 };
@@ -41,6 +173,8 @@ export const LEGACY_STORAGE_KEYS = ['sonicdsp.project.v1'];
 export const PPQ = 480;
 export const BEATS_PER_BAR = 4;
 
+export const MIDI_DEFAULTS = { binds: [] };
+
 export const LIMITS = {
   maxTracks: 8,
   maxEventsPerTrack: 5000,
@@ -59,13 +193,25 @@ export const LIMITS = {
   maxDelayTone: 9000,
   minReverbSize: 0.3,
   maxReverbSize: 8,
+  maxMidiBinds: 32,
 };
 
 export const QUANTIZE_STEPS = [0, 60, 120, 240]; // OFF, 1/32, 1/16, 1/8 (PPQ 480)
 
 const SOURCE_IDS = new Set(SOURCES.map((s) => s.id));
 const DEST_IDS = new Set(DESTS.map((d) => d.id));
-const KNOWN_TRACK_KEYS = new Set(['id', 'name', 'patchName', 'patch', 'mute', 'solo', 'gain', 'sends', 'takes']);
+const KNOWN_TRACK_KEYS = new Set([
+  'id',
+  'name',
+  'patchName',
+  'patch',
+  'instrument',
+  'mute',
+  'solo',
+  'gain',
+  'sends',
+  'takes',
+]);
 
 const TOP_LEVEL_PATCH_KEYS = new Set([
   'glide',
@@ -91,7 +237,7 @@ const isInt = (v) => isNum(v) && Number.isInteger(v);
 
 /* ------------------------------------------------------------------ Fabriken */
 
-export function createTrack({ name, patch, id, gain = 0.8, patchName = 'Init', sends } = {}) {
+export function createTrack({ name, patch, id, gain = 0.8, patchName = 'Init', sends, instrument = 'synth' } = {}) {
   return {
     id: id || newId('trk'),
     name: name || 'Track',
@@ -100,6 +246,7 @@ export function createTrack({ name, patch, id, gain = 0.8, patchName = 'Init', s
     mute: false,
     solo: false,
     gain,
+    instrument: INSTRUMENT_IDS.includes(instrument) ? instrument : 'synth',
     sends: { ...SEND_DEFAULTS, ...(sends || {}) },
     clip: new Clip(),
   };
@@ -120,6 +267,11 @@ export function createProject(overrides = {}) {
     modWheel: overrides.modWheel || 0,
     activeTrackId: overrides.activeTrackId || tracks[0].id,
     fx: { ...FX_DEFAULTS, ...(overrides.fx || {}) },
+    midi: {
+      binds: Array.isArray(overrides.midi && overrides.midi.binds)
+        ? overrides.midi.binds.map((b) => ({ ...b }))
+        : [],
+    },
     tracks,
   };
 }
@@ -301,6 +453,55 @@ function validateSends(raw, path, errors, warnings) {
   return sends;
 }
 
+function validateMidi(raw, errors, warnings) {
+  const midi = { binds: [] };
+  if (raw === undefined) return midi;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push('midi: Objekt erwartet');
+    return midi;
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== 'binds') warnings.push(`midi.${key}: unbekanntes Feld ignoriert`);
+  }
+  if (raw.binds === undefined) return midi;
+  if (!Array.isArray(raw.binds)) {
+    errors.push('midi.binds: Array erwartet');
+    return midi;
+  }
+  if (raw.binds.length > LIMITS.maxMidiBinds) {
+    errors.push(`midi.binds: mehr als ${LIMITS.maxMidiBinds} Bindungen`);
+    return midi;
+  }
+  const seen = new Set();
+  raw.binds.forEach((bind, i) => {
+    const at = `midi.binds[${i}]`;
+    if (!bind || typeof bind !== 'object' || Array.isArray(bind)) {
+      errors.push(`${at}: Objekt erwartet`);
+      return;
+    }
+    const cc = bind.cc;
+    const channel = bind.channel === undefined ? 0 : bind.channel;
+    const target = bind.target;
+    if (!isInt(cc) || cc < 0 || cc > 127) {
+      errors.push(`${at}.cc: ganzzahlig 0…127 erwartet (${JSON.stringify(cc)})`);
+      return;
+    }
+    if (!isInt(channel) || channel < 0 || channel > 16) {
+      errors.push(`${at}.channel: ganzzahlig 0…16 erwartet (0 = alle) (${JSON.stringify(channel)})`);
+      return;
+    }
+    if (typeof target !== 'string' || !MIDI_TARGETS.includes(target)) {
+      errors.push(`${at}.target: "${target}" ist kein bekanntes Ziel`);
+      return;
+    }
+    const key = `${cc}:${channel}`;
+    if (seen.has(key)) warnings.push(`${at}: CC ${cc}/Kanal ${channel} doppelt – letzte Bindung gilt`);
+    seen.add(key);
+    midi.binds.push({ cc, channel, target });
+  });
+  return midi;
+}
+
 function validateFx(raw, errors, warnings) {
   const fx = { ...FX_DEFAULTS };
   if (raw === undefined) return fx;
@@ -362,20 +563,40 @@ function validateFx(raw, errors, warnings) {
  * nichts wird entfernt oder umgedeutet). Unbekannte Versionen bleiben unverändert
  * und werden von `validateProject` abgelehnt.
  */
+function migrateV1toV2(raw) {
+  const out = structuredClone(raw);
+  out.version = 2;
+  out.fx = { ...FX_DEFAULTS, ...(raw.fx && typeof raw.fx === 'object' && !Array.isArray(raw.fx) ? raw.fx : {}) };
+  out.tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).map((t) => {
+    if (!t || typeof t !== 'object') return t;
+    const sends = t.sends && typeof t.sends === 'object' && !Array.isArray(t.sends) ? t.sends : {};
+    return { ...t, sends: { ...SEND_DEFAULTS, ...sends } };
+  });
+  return out;
+}
+
+function migrateV2toV3(raw) {
+  const out = structuredClone(raw);
+  out.version = 3;
+  out.tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).map((t) => {
+    if (!t || typeof t !== 'object') return t;
+    return { ...t, instrument: INSTRUMENT_IDS.includes(t.instrument) ? t.instrument : 'synth' };
+  });
+  out.midi = { binds: Array.isArray(raw.midi && raw.midi.binds) ? raw.midi.binds : [] };
+  return out;
+}
+
+/**
+ * Hebt ein älteres Projekt auf das aktuelle Schema (nur additive Defaults,
+ * nichts wird entfernt oder umgedeutet). Unbekannte Versionen bleiben unverändert
+ * und werden von `validateProject` abgelehnt.
+ */
 export function migrate(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
-  if (raw.version === 1) {
-    const out = structuredClone(raw);
-    out.version = 2;
-    out.fx = { ...FX_DEFAULTS, ...(raw.fx && typeof raw.fx === 'object' && !Array.isArray(raw.fx) ? raw.fx : {}) };
-    out.tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).map((t) => {
-      if (!t || typeof t !== 'object') return t;
-      const sends = t.sends && typeof t.sends === 'object' && !Array.isArray(t.sends) ? t.sends : {};
-      return { ...t, sends: { ...SEND_DEFAULTS, ...sends } };
-    });
-    return out;
-  }
-  return raw;
+  let out = raw;
+  if (out.version === 1) out = migrateV1toV2(out);
+  if (out.version === 2) out = migrateV2toV3(out);
+  return out;
 }
 
 /**
@@ -404,7 +625,7 @@ export function validateProject(raw) {
 
   const KNOWN_PROJECT_KEYS = new Set([
     'version', 'name', 'bpm', 'bars', 'quantizeStep', 'swing', 'metronome',
-    'master', 'modWheel', 'activeTrackId', 'fx', 'tracks',
+    'master', 'modWheel', 'activeTrackId', 'fx', 'midi', 'tracks',
   ]);
   for (const key of Object.keys(data)) {
     if (!KNOWN_PROJECT_KEYS.has(key)) warnings.push(`${key}: unbekanntes Feld ignoriert`);
@@ -464,10 +685,27 @@ export function validateProject(raw) {
         if (!KNOWN_TRACK_KEYS.has(key)) warnings.push(`${at}.${key}: unbekanntes Feld ignoriert`);
       }
       const sends = validateSends(rt.sends, `${at}.sends`, errors, warnings);
+      const instrument = rt.instrument === undefined ? 'synth' : rt.instrument;
+      if (!INSTRUMENT_IDS.includes(instrument)) {
+        errors.push(`${at}.instrument: "${instrument}" nicht erlaubt (${INSTRUMENT_IDS.join(' / ')})`);
+      }
       const takes = validateEvents(rt.takes, `${at}.takes`, loopTicks, errors);
       const clip = Clip.fromTakes(takes);
 
-      if (patch) tracks.push({ id, name: trackName, patchName, patch, mute, solo, gain, sends, clip });
+      if (patch) {
+        tracks.push({
+          id,
+          name: trackName,
+          patchName,
+          patch,
+          instrument: INSTRUMENT_IDS.includes(instrument) ? instrument : 'synth',
+          mute,
+          solo,
+          gain,
+          sends,
+          clip,
+        });
+      }
     });
   }
 
@@ -478,6 +716,7 @@ export function validateProject(raw) {
   }
 
   const fx = validateFx(data.fx, errors, warnings);
+  const midi = validateMidi(data.midi, errors, warnings);
 
   if (errors.length) return { ok: false, project: null, errors, warnings };
 
@@ -497,6 +736,7 @@ export function validateProject(raw) {
       modWheel,
       activeTrackId,
       fx,
+      midi,
       tracks,
     },
     migratedFrom,
@@ -509,6 +749,7 @@ export function serialize(project) {
   return {
     version: PROJECT_VERSION,
     fx: { ...FX_DEFAULTS, ...(project.fx || {}) },
+    midi: { binds: (project.midi && Array.isArray(project.midi.binds) ? project.midi.binds : []).map((b) => ({ ...b })) },
     name: project.name,
     bpm: project.bpm,
     bars: project.bars,
@@ -522,6 +763,7 @@ export function serialize(project) {
       id: t.id,
       name: t.name,
       patchName: t.patchName || 'Init',
+      instrument: t.instrument || 'synth',
       mute: t.mute,
       solo: t.solo,
       gain: t.gain,

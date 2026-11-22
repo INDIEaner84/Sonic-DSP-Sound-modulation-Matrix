@@ -1946,3 +1946,183 @@ body.is-recording .loop-progress i {
   background: #2d3742;
   border: 1px solid #586675;
 }
+
+/* ------------------------------------------------- Instrument, Pads, MIDI */
+
+.track-extras {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 2px 1px 26px;
+  flex-wrap: wrap;
+}
+
+.track-instrument {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 7.5px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.track-row.active .track-instrument {
+  color: rgba(255, 178, 69, 0.85);
+}
+
+.track-instrument .mini-select {
+  max-width: 78px;
+}
+
+.panel-pads .panel-body {
+  gap: 8px;
+}
+
+.pads {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pad {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2px;
+  min-height: 46px;
+  padding: 6px 7px;
+  border-radius: 8px;
+  border: 1px solid #2c3947;
+  background: linear-gradient(180deg, rgba(38, 48, 60, 0.95), rgba(22, 28, 36, 0.95));
+  color: #cfe0ee;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: transform 0.06s, border-color 0.14s, box-shadow 0.14s;
+}
+
+.pads[data-instrument='drums'] .pad {
+  border-color: rgba(84, 215, 199, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(84, 215, 199, 0.08);
+}
+
+.pad:hover {
+  border-color: #4a5d70;
+}
+
+.pad.hit,
+.pad:active {
+  transform: translateY(1px);
+  border-color: var(--amber);
+  background: linear-gradient(180deg, rgba(255, 178, 69, 0.28), rgba(40, 32, 18, 0.95));
+}
+
+.pad-label {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.pad-note {
+  font-size: 7.5px;
+  color: var(--dim);
+}
+
+.panel-midi .panel-body {
+  gap: 8px;
+}
+
+.midi-devices,
+.midi-binds {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.midi-device {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: #b9cada;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.midi-empty {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  color: var(--dim);
+}
+
+.midi-learn {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.midi-learn-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+  flex: 1 1 120px;
+}
+
+#midiLearnBtn.on {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.midi-bind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: rgba(84, 215, 199, 0.06);
+  border: 1px solid rgba(84, 215, 199, 0.16);
+}
+
+.midi-bind-label {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  color: #b9cada;
+}
+
+.midi-bind-del {
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 3px;
+}
+
+.midi-bind-del:hover {
+  color: #ff7a9c;
+}
+
+.midi-monitor {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

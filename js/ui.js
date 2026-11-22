@@ -2,7 +2,7 @@
  * Knobs, Segment-Schalter, Mod-Wheel, Modulationsmatrix, Keyboard, Scope.
  */
 
-import { SOURCES, DESTS, clamp } from './state.js';
+import { SOURCES, DESTS, clamp, DRUM_KIT } from './state.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const KNOB_ARC = 'M 11.272 36.728 A 18 18 0 1 1 36.728 36.728';
@@ -1075,7 +1075,18 @@ export class ClipStrip {
  * Die Liste wird bei jeder Änderung neu aufgebaut – bei max. 8 Spuren günstig
  * und ohne inkrementelle Zustandssynchronisation.
  */
-export function createTrackList(root, { getTracks, getActiveId, onSelect, onMute, onSolo, onGain, onSend, onRename, onDelete }) {
+export function createTrackList(root, {
+  getTracks,
+  getActiveId,
+  onSelect,
+  onMute,
+  onSolo,
+  onGain,
+  onSend,
+  onInstrument,
+  onRename,
+  onDelete,
+}) {
   const list = document.createElement('div');
   list.className = 'tracks';
   root.appendChild(list);
@@ -1183,6 +1194,30 @@ export function createTrackList(root, { getTracks, getActiveId, onSelect, onMute
         }, 2500);
       });
 
+      const extras = document.createElement('div');
+      extras.className = 'track-extras';
+
+      const instrument = document.createElement('label');
+      instrument.className = 'track-instrument';
+      const instrumentLabel = document.createElement('span');
+      instrumentLabel.textContent = 'INST';
+      const instrumentSelect = document.createElement('select');
+      instrumentSelect.className = 'mini-select track-instrument-select';
+      instrumentSelect.setAttribute('aria-label', `Instrument ${track.name}`);
+      [
+        ['synth', 'SYNTH'],
+        ['piano', 'PIANO'],
+        ['drums', 'DRUMS'],
+      ].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        instrumentSelect.appendChild(option);
+      });
+      instrumentSelect.value = track.instrument || 'synth';
+      instrumentSelect.addEventListener('change', () => onInstrument(track.id, instrumentSelect.value));
+      instrument.append(instrumentLabel, instrumentSelect);
+
       const sends = document.createElement('div');
       sends.className = 'track-sends';
       [
@@ -1207,7 +1242,8 @@ export function createTrackList(root, { getTracks, getActiveId, onSelect, onMute
         sends.appendChild(wrap);
       });
 
-      row.append(idx, name, patchName, notes, mute, solo, gainWrap, del, sends);
+      extras.append(instrument, sends);
+      row.append(idx, name, patchName, notes, mute, solo, gainWrap, del, extras);
       list.appendChild(row);
     });
   }
@@ -1240,4 +1276,61 @@ export function createTrackList(root, { getTracks, getActiveId, onSelect, onMute
 
   build();
   return { build, el: list };
+}
+
+/* -------------------------------------------------------------------- Pads */
+
+/**
+ * Pad-Raster für das Drum-Kit (8 Pads). Klick/Enter löst `onTrigger(note, label)` aus;
+ * eingehende MIDI-Noten können über `flash(note)` dieselbe Optik zeigen.
+ */
+export function createPads(root, { onTrigger } = {}) {
+  const grid = document.createElement('div');
+  grid.className = 'pads';
+  const buttons = new Map();
+
+  for (const pad of DRUM_KIT) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pad';
+    button.dataset.note = String(pad.note);
+    button.setAttribute('aria-label', `${pad.label} (Note ${pad.note})`);
+    const label = document.createElement('span');
+    label.className = 'pad-label';
+    label.textContent = pad.label;
+    const num = document.createElement('span');
+    num.className = 'pad-note';
+    num.textContent = String(pad.note);
+    button.append(label, num);
+    button.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      trigger(pad.note);
+    });
+    buttons.set(pad.note, button);
+    grid.appendChild(button);
+  }
+
+  function trigger(note) {
+    const button = buttons.get(note) || [...buttons.values()][0];
+    if (button) flash(note, button);
+    if (onTrigger) onTrigger(note);
+  }
+
+  function flash(note, element) {
+    const button = element || buttons.get(note);
+    if (!button) return;
+    button.classList.add('hit');
+    setTimeout(() => button.classList.remove('hit'), 110);
+  }
+
+  root.appendChild(grid);
+  return {
+    el: grid,
+    trigger,
+    flash: (note) => flash(note),
+    /** Pad-Optik an das Instrument der aktiven Spur anpassen. */
+    setInstrument(instrument) {
+      grid.dataset.instrument = instrument || 'synth';
+    },
+  };
 }

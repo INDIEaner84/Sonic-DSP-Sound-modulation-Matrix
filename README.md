@@ -1,6 +1,6 @@
 <div align="center">
   <h1>SONIC DSP — Modulation Matrix</h1>
-  <p>Polyphoner Web-Audio-Synthesizer mit Modulationsmatrix, Loop-Recorder, Spuren, Effekten, MIDI-Import/Export und WAV-Mitschnitt.</p>
+  <p>Web-Audio-Studio: Synthesizer, Klavier und Drum-Kit mit Modulationsmatrix, Loop-Recorder, Spuren, Effekten, MIDI-In/Out und WAV-Mitschnitt.</p>
 </div>
 
 ## Was ist das?
@@ -14,6 +14,10 @@ Dazu ein **Loop-Recorder mit Transport**: Metronom, Count-in, Quantize, Swing, O
 Takes und Undo. Aufgenommen werden MIDI-Events (Note/Zeit/Velocity/Dauer), kein Audio —
 damit bleibt alles editierbar, als JSON speicherbar und als Standard-MIDI-Datei
 exportierbar.
+
+Jede Spur hat ein **Instrument**: `SYNTH` (der Patch mit Matrix), `PIANO` (Partiale + Hammer,
+velocity-abhängig) oder `DRUMS` (Kit mit acht Pads, GM-Noten 36–49). Klavier und Kit sind
+synthetisch erzeugt — keine Sample-Downloads, keine Lizenzfragen.
 
 Ein **Delay- und ein Reverb-Bus** liegen hinter den Spuren; jede Spur hat eigene Sends.
 Die Reverb-Impulsantwort wird im Browser erzeugt (kein Sample-Download, keine Assets).
@@ -92,6 +96,7 @@ zeigt die Noten farbig pro Take und den Playhead.
 | **MIDI Export** | Standard-MIDI-Datei (Format 1), Wiederholungen 1–16 wählbar |
 | **MIDI Import** | MIDI-Datei als Projekt übernehmen (max. 8 Spuren) |
 | **Mix ⤓ WAV** | nimmt die laufende Ausgabe in Echtzeit auf (1/2/4 Loops + Ausklang) und speichert sie als WAV; das Metronom ist dabei stumm |
+| **INST** in der Spurzeile | Instrument der Spur: SYNTH / PIANO / DRUMS |
 
 Autosave: jede Änderung wird nach 700 ms in `localStorage` geschrieben
 (`sonicdsp.project.v1`) und beim nächsten Start automatisch geladen (Statusanzeige neben
@@ -101,6 +106,37 @@ generell als Toast unten mittig im Bild.
 
 Preset-Auswahl wirkt immer auf die **aktive Spur**:
 Init Lead, Wobble Bass, Pluck Lead, Drift Pad, Res Sweep FX, Sub Bass, Noise Hat, Glass Bell.
+
+### Instrumente und Pads
+
+| Instrument | Klang | Bedienung |
+| --- | --- | --- |
+| **SYNTH** | der Patch: zwei Oszillatoren, Filter, Hüllkurven, Matrix, LFOs | Rack links/rechts, Preset-Auswahl |
+| **PIANO** | fünf verstimmte Partiale + Hammer-Noise, Ausklingen je Lage | Tastatur/Pads/MIDI; velocity steuert Helligkeit und Lautstärke |
+| **DRUMS** | Kick, Snare, Clap, Hat zu/open, Tom, Rim, Crash (synthetisch) | die acht Pads im Panel „Pads“ oder Noten 36–49 |
+
+Pads lassen sich mit der Maus, der Rechner-Tastatur (Noten der aktiven Oktave) und über
+MIDI spielen; im Aufnahme-Modus landen Pad-Schläge als Noten im Loop der aktiven Spur.
+
+### MIDI-Controller (z. B. Nektar Impact)
+
+| Element | Wirkung |
+| --- | --- |
+| **Verbinden** | fragt `navigator.requestMIDIAccess()` an (Web MIDI, ohne SysEx) und listet alle Eingänge |
+| Noten | spielen die aktive Spur; Drum-Noten schlagen die Pads an (Pad leuchtet) |
+| **LERNEN + CC anlernen** | Ziel wählen, Knopf drücken, am Controller einen Regler/eine Taste bewegen → Bindung wird gespeichert |
+| Bindungen | `CC x · Kanal y → Ziel`, pro Projekt gespeichert, einzeln löschbar (×) |
+| Monitor | zeigt die zuletzt empfangene Nachricht (`CH 1 · CC 74 · Wert 96`) |
+
+Ziele: Master, Mod-Wheel, Delay-Feedback/-Tone, Reverb-Größe/-Damp, Pegel/Sends der aktiven
+Spur sowie Play, Stop, Play/Stop, Record, Loop leeren und Panic.
+
+**Nektar Impact (GX/LX/…):** Die Pads senden Noten (üblicherweise Kanal 10) und spielen damit
+direkt das Drum-Kit. Transport-, Mixer- und Preset-Tasten senden je nach Modell und Firmware
+unterschiedliche CC-Nummern — dafür gibt es keine fest geratene Belegung: einmal
+„CC anlernen“ drücken, Taste am Gerät betätigen, fertig. Der Monitor zeigt dabei den
+tatsächlichen CC an. Die Bindungen liegen im Projekt (JSON), nicht im Browser-Speicher des
+Geräts.
 
 ### Effekte (FX-Feld im Tracks-Panel)
 
@@ -126,7 +162,8 @@ js/state.js         Patch-Modell, Bereiche/Enums, Presets, Zufall
 js/project.js       Projekt-Schema, Validierung, localStorage, Datei-I/O, Kontext
 js/clip.js          Loop-Inhalt als Noten-Events, Takes, Undo
 js/midi-io.js       SMF-Encoder/Decoder (Format 0/1), ohne Dependencies
-js/audio.js         Audio-Engine: Spuren-Ketten, Voices, ADSR, LFOs, Matrix, Metronom
+js/midi-input.js    Web-MIDI-Eingang: Parser, CC-Learn, Geräte (ohne DOM testbar)
+js/audio.js         Audio-Engine: Spuren-Ketten, Synth-/Piano-/Drum-Stimmen, FX-Busse, Metronom
 js/clock.js         Transport, Lookahead-Scheduler, Quantize, Swing, Aufnahme-Logik
 js/wav.js           WAV-Encoder (16 Bit PCM), ohne Browser-Abhängigkeit
 js/recorder.js      Mix-Mitschnitt (MediaRecorder) und Umkodierung nach WAV
@@ -157,8 +194,8 @@ die Note-Logik — dadurch bleiben geplante Releases konsistent.
 ## Tests
 
 ```bash
-npm test           # 100 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder
-npm run test:ui    # zusätzlich 19 jsdom-Integrationstests (119 gesamt)
+npm test           # 116 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
+npm run test:ui    # zusätzlich 22 jsdom-Integrationstests (138 gesamt)
 ```
 
 Die Tests laufen ohne Framework (`node:test`-frei, eigener Mini-Runner in
@@ -176,7 +213,8 @@ komplette UI-Fluss (Spur anlegen, umbenennen, aufnehmen, exportieren, importiere
 | E3 | MIDI-Export/Import (Standard-MIDI-Datei) | fertig |
 | E4 | Effekt-Sends (Delay/Reverb), Rausch-Oszillator, zusätzliche Presets | fertig |
 | E5 | Mix-Mitschnitt als WAV | fertig (Browser-Teil manuell zu prüfen) |
-| E6 | SoundFont-Instrumente (`smplr`), Spur-Effekte als Inserts, Song-Modus | offen |
+| E6 | Instrumente je Spur (Klavier, Drum-Kit, Pads), Web-MIDI-Eingang mit CC-Learn | fertig (Web MIDI nur im Browser prüfbar) |
+| E7 | SoundFont-/Sample-Instrumente (`smplr`), Spur-Inserts, Song-Modus | offen |
 
 Details und Begründungen: `docs/KOMPONIEREN-KONZEPT.md`, offene Punkte und
 Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`.
@@ -189,4 +227,10 @@ Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`.
 - Ohne Build-Schritt: alle Dateien sind direkt auslieferbar (`index.html` + `js/*` + `css/*`).
 - Der WAV-Mitschnitt läuft in Echtzeit (Faktor 1) und braucht eine Audioausgabe; in
   Browsern ohne `MediaRecorder` bleibt der Knopf wirkungslos und meldet das per Toast.
-- Projekte aus älteren Ständen (Schema 1) werden beim Laden automatisch übernommen.
+- Projekte aus älteren Ständen (Schema 1 und 2) werden beim Laden automatisch übernommen.
+- Web MIDI braucht einen Browser mit `navigator.requestMIDIAccess` (Chrome/Edge; Firefox
+  nur mit Freigabe) und eine Nutzeraktion für die Berechtigung — ohne Zugriff bleibt das
+  Panel bei „AUS“ und die Tastatur funktioniert unverändert.
+- „VST“ im engeren Sinn (native Plugins) gibt es im Browser nicht; Klavier und Kit sind
+  eingebaute Synth-Instrumente. Sample-basierte Instrumente (SF2) sind als nächste Stufe
+  vorgesehen.

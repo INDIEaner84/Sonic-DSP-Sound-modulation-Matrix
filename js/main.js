@@ -35,9 +35,15 @@ import {
   readBinaryFile,
   FX_DEFAULTS,
   DELAY_DIVISIONS,
+  INSTRUMENTS,
+  MIDI_TARGETS,
+  MIDI_TARGET_LABELS,
+  isNumericTarget,
+  applyControl,
 } from './project.js';
 import { encodeProject, decodeToProject, defaultImportPatches } from './midi-io.js';
 import { mixSeconds, canRecord, recordOutput, blobToWav } from './recorder.js';
+import { createMidiRouter, openMidiAccess, describeMessage } from './midi-input.js';
 import {
   createKnob,
   createSeg,
@@ -46,6 +52,7 @@ import {
   createKeyboard,
   createSlider,
   createTrackList,
+  createPads,
   Scope,
   LfoPreview,
   ClipStrip,
@@ -423,6 +430,17 @@ const trackList = createTrackList(document.getElementById('tracks'), {
     t.gain = clamp(value, 0, LIMITS.maxGain);
     scheduleSave();
   },
+  onInstrument: (id, value) => {
+    const t = project.tracks.find((x) => x.id === id);
+    if (!t || !INSTRUMENTS.some((i) => i.id === value)) return;
+    if (t.instrument === value) return;
+    clock.panic();
+    t.instrument = value;
+    trackList.build();
+    refreshInstrumentUi();
+    scheduleSave();
+    toast(`Spur „${t.name}": ${value.toUpperCase()}`, 'info');
+  },
   onSend: (id, kind, value) => {
     const t = project.tracks.find((x) => x.id === id);
     if (!t || !(kind in t.sends)) return;
@@ -599,6 +617,260 @@ function replaceProject(next) {
 }
 
 document.getElementById('saveBtn').addEventListener('click', downloadJson);
+
+
+/* ------------------------------------------------------- Pads & Instrument */
+
+const pads = createPads(document.getElementById('pads'), {
+  onTrigger: (note) => {
+    ensureAudio().then(() => {
+      if (!engine.ctx) return;
+      clock.noteOn(note, 0.92);
+      /* Pads sind Ein-Schuss: kurze Notendauer, damit die Aufnahme sauber bleibt. */
+      setTimeout(() => clock.noteOff(note), 160);
+    });
+  },
+});
+
+const padTag = document.getElementById('padTag');
+
+function refreshInstrumentUi() {
+  const track = activeTrack();
+  const instrument = track ? track.instrument || 'synth' : 'synth';
+  if (pads) pads.setInstrument(instrument);
+  if (padTag) padTag.textContent = instrument.toUpperCase();
+}
+
+/* ------------------------------------------------------------------ MIDI In */
+
+const midiStatusEl = document.getElementById('midiStatus');
+const midiDevicesEl = document.getElementById('midiDevices');
+const midiTargetEl = document.getElementById('midiTarget');
+const midiLearnBtn = document.getElementById('midiLearnBtn');
+const midiConnectBtn = document.getElementById('midiConnectBtn');
+const midiBindsEl = document.getElementById('midiBinds');
+const midiMonitorEl = document.getElementById('midiMonitor');
+
+let midiAccess = null;
+const ccState = new Map();
+
+const midiRouter = createMidiRouter({
+  getProject: () => project,
+  onNoteOn: (note, velocity) => {
+    ensureAudio().then(() => {
+      if (!engine.ctx) return;
+      clock.noteOn(note, velocity);
+      if (pads) pads.flash(note);
+    });
+  },
+  onNoteOff: (note) => clock.noteOff(note),
+  onControl: (target, amount, info) => handleMidiControl(target, amount, info),
+});
+
+/** Transportziele nur beim Hochziehen über 0,5 auslösen (kein Doppel-Feuern). */
+function ccTriggered(target, amount, cc) {
+  const key = `${cc}:${target}`;
+  const previous = ccState.get(key) || 0;
+  ccState.set(key, amount);
+  return amount >= 0.5 && previous < 0.5;
+}
+
+let uiRefreshQueued = false;
+/** Viele CC-Nachrichten hintereinander dürfen die UI nicht fluten. */
+function scheduleUiRefresh() {
+  if (uiRefreshQueued) return;
+  uiRefreshQueued = true;
+  const run = () => {
+    uiRefreshQueued = false;
+    refreshUI();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, 16);
+}
+
+function handleMidiControl(target, amount, info) {
+  if (!info || !info.numeric) {
+    if (!ccTriggered(target, amount, info && info.cc)) return;
+    switch (target) {
+      case 'transport.play':
+        if (!clock.running) togglePlay();
+        break;
+      case 'transport.stop':
+        if (clock.running) clock.stop();
+        syncTransportUI();
+        break;
+      case 'transport.toggle':
+        togglePlay();
+        break;
+      case 'transport.record':
+        toggleRec();
+        break;
+      case 'clip.clear':
+        clock.clearClip();
+        trackList.build();
+        syncTransportUI();
+        scheduleSave();
+        break;
+      case 'panic':
+        clock.panic();
+        pressedKeys.clear();
+        keyboard.releaseAll();
+        break;
+      default:
+        break;
+    }
+    return;
+  }
+  scheduleUiRefresh();
+  scheduleSave();
+}
+
+function setMidiStatus(text, kind = '') {
+  if (!midiStatusEl) return;
+  midiStatusEl.textContent = text;
+  midiStatusEl.className = 'tag' + (kind ? ' ' + kind : '');
+}
+
+function renderMidiDevices(devices) {
+  if (!midiDevicesEl) return;
+  midiDevicesEl.innerHTML = '';
+  if (!devices || !devices.length) {
+    const empty = document.createElement('span');
+    empty.className = 'midi-empty';
+    empty.textContent = 'kein Gerät gefunden';
+    midiDevicesEl.appendChild(empty);
+    return;
+  }
+  for (const device of devices) {
+    const chip = document.createElement('span');
+    chip.className = 'midi-device';
+    chip.textContent = device.name + (device.manufacturer ? ` · ${device.manufacturer}` : '');
+    chip.title = `ID ${device.id}`;
+    midiDevicesEl.appendChild(chip);
+  }
+}
+
+function renderMidiBinds() {
+  if (!midiBindsEl) return;
+  midiBindsEl.innerHTML = '';
+  const binds = project.midi && Array.isArray(project.midi.binds) ? project.midi.binds : [];
+  if (!binds.length) {
+    const empty = document.createElement('span');
+    empty.className = 'midi-empty';
+    empty.textContent = 'noch keine Bindung';
+    midiBindsEl.appendChild(empty);
+    return;
+  }
+  binds.forEach((bind, index) => {
+    const row = document.createElement('div');
+    row.className = 'midi-bind';
+    const label = document.createElement('span');
+    label.className = 'midi-bind-label';
+    const channel = bind.channel === 0 ? 'alle Kanäle' : `Kanal ${bind.channel}`;
+    label.textContent = `CC ${bind.cc} · ${channel} → ${MIDI_TARGET_LABELS[bind.target] || bind.target}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'midi-bind-del';
+    remove.textContent = '×';
+    remove.title = 'Bindung löschen';
+    remove.setAttribute('aria-label', `Bindung CC ${bind.cc} löschen`);
+    remove.addEventListener('click', () => {
+      project.midi.binds.splice(index, 1);
+      renderMidiBinds();
+      scheduleSave();
+    });
+    row.append(label, remove);
+    midiBindsEl.appendChild(row);
+  });
+}
+
+function setLearnState(active) {
+  if (!midiLearnBtn) return;
+  midiLearnBtn.textContent = active ? 'Lernen … (abbrechen)' : 'CC anlernen';
+  midiLearnBtn.classList.toggle('on', active);
+}
+
+function addMidiBind(bind) {
+  const binds = project.midi.binds;
+  const existing = binds.findIndex((b) => b.cc === bind.cc && b.channel === bind.channel);
+  if (existing >= 0) {
+    binds[existing] = bind;
+  } else {
+    if (binds.length >= LIMITS.maxMidiBinds) {
+      toast(`Maximal ${LIMITS.maxMidiBinds} MIDI-Bindungen`, 'warn');
+      return false;
+    }
+    binds.push(bind);
+  }
+  renderMidiBinds();
+  scheduleSave();
+  return true;
+}
+
+if (midiTargetEl) {
+  for (const target of MIDI_TARGETS) {
+    const option = document.createElement('option');
+    option.value = target;
+    option.textContent = MIDI_TARGET_LABELS[target] || target;
+    midiTargetEl.appendChild(option);
+  }
+  midiTargetEl.value = 'master';
+}
+
+if (midiLearnBtn) {
+  midiLearnBtn.addEventListener('click', () => {
+    if (midiRouter.learning) {
+      midiRouter.cancelLearn();
+      setLearnState(false);
+      toast('Anlernen abgebrochen', 'info');
+      return;
+    }
+    if (!midiAccess) {
+      toast('Erst MIDI verbinden', 'warn');
+      return;
+    }
+    const target = midiTargetEl ? midiTargetEl.value : 'master';
+    midiRouter.startLearn(target, (bind) => {
+      setLearnState(false);
+      if (addMidiBind(bind)) {
+        toast(`CC ${bind.cc} (Kanal ${bind.channel}) → ${MIDI_TARGET_LABELS[bind.target] || bind.target}`, 'ok');
+      }
+    });
+    setLearnState(true);
+    toast('Jetzt den Regler bzw. die Taste am Controller bewegen …', 'info');
+  });
+}
+
+if (midiConnectBtn) {
+  midiConnectBtn.addEventListener('click', async () => {
+    if (midiAccess) return;
+    setMidiStatus('suche …');
+    const result = await openMidiAccess({
+      router: midiRouter,
+      onInput: (result, event) => {
+        if (midiMonitorEl && event && event.data) midiMonitorEl.textContent = describeMessage(event.data);
+      },
+      onDevices: (devices) => {
+        renderMidiDevices(devices);
+        setMidiStatus(devices.length ? `${devices.length} In` : 'bereit', 'ok');
+      },
+    });
+    if (!result.ok) {
+      setMidiStatus('AUS', 'err');
+      toast(result.error, 'warn');
+      return;
+    }
+    midiAccess = result;
+    const devices = result.devices();
+    renderMidiDevices(devices);
+    setMidiStatus(devices.length ? `${devices.length} In` : 'bereit', 'ok');
+    if (midiLearnBtn) midiLearnBtn.disabled = false;
+    midiConnectBtn.disabled = true;
+    toast(devices.length ? 'MIDI verbunden: ' + devices.map((d) => d.name).join(', ') : 'MIDI bereit – kein Gerät gefunden', devices.length ? 'ok' : 'warn');
+  });
+}
+
+renderMidiBinds();
 
 /* --------------------------------------------------------------- Mix-Mitschnitt */
 
@@ -918,6 +1190,7 @@ function refreshUI() {
   matrix.refresh();
   syncPresetSelect();
   updateOctaveLabel();
+  refreshInstrumentUi();
   projectNameInput.value = project.name;
 }
 
@@ -998,6 +1271,7 @@ raf(loop);
 refreshUI();
 trackList.build();
 syncTransportUI();
+renderMidiBinds();
 if (restored.ok) {
   setSaveState(`wiederhergestellt ${new Date().toLocaleTimeString('de-DE')}`, 'ok');
 } else if (restored.errors && restored.errors.length && !restored.empty) {

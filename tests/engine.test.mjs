@@ -271,3 +271,77 @@ test('FX-Parameter werden nur bei Änderung geschrieben', async () => {
   eq(engine.delay.delayTime.writes, writes + 1, 'genau ein Schreiben nach Änderung');
   near(engine.delay.delayTime.value, 1, 1e-6, '1/2 bei 120 BPM');
 });
+
+/* ------------------------------------------------------------ Instrumente */
+
+test('Piano-Stimme nutzt Partiale, Hammer und Velocity-Cutoff', async () => {
+  const { engine, ctx, a } = await setup();
+  a.instrument = 'piano';
+  const oscBefore = ctx.created.oscillators.length;
+  const noiseBefore = ctx.created.bufferSources.length;
+  const v = engine.noteOn(a.id, 60, 0.9);
+  assert(v, 'Stimme fehlt');
+  eq(v.kind, 'piano');
+  eq(ctx.created.oscillators.length, oscBefore + 5, 'fünf Partiale');
+  eq(ctx.created.bufferSources.length, noiseBefore + 1, 'Hammer-Noise');
+  assert(v.filter.frequency.value > 4000, 'Cutoff folgt Velocity');
+  assert(v.out.gain.value >= 0, 'Gain vorhanden');
+});
+
+test('Klavier-Noten werden per Release geplant und enden', async () => {
+  const { engine, ctx, a } = await setup();
+  a.instrument = 'piano';
+  const v = engine.noteOn(a.id, 48, 0.8);
+  engine.scheduleRelease(v, 0.4);
+  near(v.releaseAt, 0.4, 1e-6);
+  assert(v.endAt <= 0.9, 'Ausklang zu lang: ' + v.endAt);
+  ctx.advance(0.45);
+  engine.tick();
+  eq(v.released, true);
+  ctx.advance(1);
+  engine.tick();
+  eq(v.dead, true);
+});
+
+test('Drum-Pads nutzen eigene Stimmen und GM-Noten', async () => {
+  const { engine, ctx, a } = await setup();
+  a.instrument = 'drums';
+  const v = engine.noteOn(a.id, 36, 0.9);
+  eq(v.kind, 'drums');
+  eq(v.pad.id, 'kick');
+  assert(ctx.created.oscillators.length > 0, 'Kick braucht einen Oszillator');
+
+  const hat = engine.noteOn(a.id, 42, 0.7);
+  eq(hat.pad.id, 'hatClosed');
+  const unbekannt = engine.noteOn(a.id, 99, 0.7);
+  eq(unbekannt.pad.id, 'hatClosed', 'unbekannte Note fällt auf geschlossene Hat zurück');
+  eq(unbekannt.kind, 'drums');
+});
+
+test('Drum-Stimme endet nach ihrem Ausklang ohne Note-Off', async () => {
+  const { engine, ctx, a } = await setup();
+  a.instrument = 'drums';
+  const v = engine.noteOn(a.id, 49, 0.8);
+  eq(v.pad.id, 'crash');
+  v.release(); // absichtlich wirkungslos
+  eq(v.released, false);
+  ctx.advance(1.5);
+  engine.tick();
+  eq(v.released, true);
+  eq(v.dead, true);
+});
+
+test('refreshVoices lässt Piano- und Drum-Stimmen unangetastet', async () => {
+  const { engine, ctx, a } = await setup();
+  a.instrument = 'piano';
+  const piano = engine.noteOn(a.id, 60, 0.8);
+  a.instrument = 'drums';
+  const drum = engine.noteOn(a.id, 38, 0.8);
+  a.patch.osc1.wave = 'square';
+  engine.refreshVoices(a.id);
+  eq(piano.kind, 'piano');
+  eq(drum.kind, 'drums');
+  ctx.advance(0.1);
+  engine.tick();
+  assert(!piano.dead || piano.triggered, 'Piano-Stimme darf nicht abrupt enden');
+});
