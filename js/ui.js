@@ -1083,6 +1083,7 @@ export function createTrackList(root, {
   onSolo,
   onGain,
   onSend,
+  onDrive,
   onInstrument,
   onRename,
   onDelete,
@@ -1241,6 +1242,23 @@ export function createTrackList(root, {
         wrap.append(tag, input);
         sends.appendChild(wrap);
       });
+
+      const driveWrap = document.createElement('label');
+      driveWrap.className = 'track-send';
+      const driveTag = document.createElement('span');
+      driveTag.textContent = 'DRV';
+      const driveInput = document.createElement('input');
+      driveInput.type = 'range';
+      driveInput.min = '0';
+      driveInput.max = '1';
+      driveInput.step = '0.01';
+      driveInput.className = 'track-send-input drive';
+      driveInput.value = String((track.insert && track.insert.drive) || 0);
+      driveInput.title = 'Drive (Insert-Sättigung)';
+      driveInput.setAttribute('aria-label', `Drive ${track.name}`);
+      driveInput.addEventListener('input', () => onDrive(track.id, Number(driveInput.value)));
+      driveWrap.append(driveTag, driveInput);
+      sends.appendChild(driveWrap);
 
       extras.append(instrument, sends);
       row.append(idx, name, patchName, notes, mute, solo, gainWrap, del, extras);

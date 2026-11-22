@@ -36,6 +36,7 @@ import {
   readBinaryFile,
   FX_DEFAULTS,
   DELAY_DIVISIONS,
+  PROJECT_VERSION,
   INSTRUMENTS,
   MIDI_TARGETS,
   MIDI_TARGET_LABELS,
@@ -436,6 +437,12 @@ const trackList = createTrackList(document.getElementById('tracks'), {
     t.gain = clamp(value, 0, LIMITS.maxGain);
     scheduleSave();
   },
+  onDrive: (id, value) => {
+    const t = project.tracks.find((x) => x.id === id);
+    if (!t) return;
+    t.insert.drive = clamp(value, 0, LIMITS.maxDrive);
+    scheduleSave();
+  },
   onInstrument: (id, value) => {
     const t = project.tracks.find((x) => x.id === id);
     if (!t || !INSTRUMENTS.some((i) => i.id === value)) return;
@@ -444,6 +451,7 @@ const trackList = createTrackList(document.getElementById('tracks'), {
     t.instrument = value;
     trackList.build();
     refreshInstrumentUi();
+  renderDiagnostics();
     scheduleSave();
     toast(`Spur „${t.name}": ${value.toUpperCase()}`, 'info');
   },
@@ -518,6 +526,51 @@ if (fxDivision) {
     project.fx.delayDivision = fxDivision.value;
     scheduleSave();
   });
+}
+
+/* ---------------------------------------------------------------- Diagnose */
+
+const diagEl = document.getElementById('diag');
+let diagCache = '';
+
+function diagnosticsText() {
+  const audio = engine.ctx
+    ? `${engine.ctx.state} · ${Math.round(engine.ctx.sampleRate / 1000)} kHz`
+    : 'aus (AUDIO STARTEN)';
+  const midi = midiAccess
+    ? `${midiAccess.devices().length} Eingang/Eingänge`
+    : 'nicht verbunden';
+  const record = typeof MediaRecorder !== 'undefined' ? 'verfügbar' : 'nicht unterstützt';
+  const notes = project.tracks.reduce((sum, t) => sum + (t.clip ? t.clip.count : 0), 0);
+  const autosave = document.getElementById('saveState');
+  return [
+    ['Audio', audio],
+    ['Projekt', `Schema v${PROJECT_VERSION} · ${project.tracks.length} Spuren · ${notes} Noten`],
+    ['MIDI', midi],
+    ['WAV-Mitschnitt', record],
+    ['Autosave', autosave ? autosave.textContent : '–'],
+  ];
+}
+
+function renderDiagnostics() {
+  if (!diagEl) return;
+  const rows = diagnosticsText();
+  const key = rows.map(([k, v]) => `${k}:${v}`).join('|');
+  if (key === diagCache) return;
+  diagCache = key;
+  diagEl.innerHTML = '';
+  for (const [label, value] of rows) {
+    const row = document.createElement('div');
+    row.className = 'diag-row';
+    const keyEl = document.createElement('span');
+    keyEl.className = 'diag-key';
+    keyEl.textContent = label;
+    const valueEl = document.createElement('span');
+    valueEl.className = 'diag-value';
+    valueEl.textContent = value;
+    row.append(keyEl, valueEl);
+    diagEl.appendChild(row);
+  }
 }
 
 function addTrack() {
@@ -1164,7 +1217,10 @@ powerBtn.addEventListener('click', async () => {
   }
 });
 
-engine.onStateChange = (st) => markAudioOn(st === 'running');
+engine.onStateChange = (st) => {
+  markAudioOn(st === 'running');
+  renderDiagnostics();
+};
 
 /* ---------------------------------------------------------------- Presets */
 
@@ -1197,6 +1253,7 @@ function refreshUI() {
   syncPresetSelect();
   updateOctaveLabel();
   refreshInstrumentUi();
+  renderDiagnostics();
   projectNameInput.value = project.name;
 }
 
@@ -1278,6 +1335,7 @@ refreshUI();
 trackList.build();
 syncTransportUI();
 renderMidiBinds();
+renderDiagnostics();
 if (restored.ok) {
   setSaveState(`wiederhergestellt ${new Date().toLocaleTimeString('de-DE')}`, 'ok');
 } else if (restored.errors && restored.errors.length && !restored.empty) {

@@ -102,10 +102,11 @@ test('Version 1 wird migriert und mit Defaults ergänzt', () => {
   const result = deserialize(JSON.stringify(raw));
   assert(result.ok, result.errors.join(' | '));
   eq(result.migratedFrom, 1);
-  eq(result.project.version, 3);
+  eq(result.project.version, PROJECT_VERSION);
   eq(result.project.fx.delayDivision, '1/8');
   eq(result.project.tracks[0].sends.delay, SEND_DEFAULTS.delay);
   eq(result.project.tracks[0].instrument, 'synth');
+  eq(result.project.tracks[0].insert, { drive: 0 });
   eq(result.project.midi.binds, []);
   assert(result.warnings.some((w) => w.includes('Projektversion 1')), result.warnings.join(' | '));
 });
@@ -379,4 +380,32 @@ test('applyControl rechnet CC-Werte auf Ziele', () => {
   eq(isNumericTarget('transport.play'), false);
   eq(isNumericTarget('master'), true);
   assert(applyControl(project, 'master', 5).value === 1, 'Werte über 1 werden geklemmt');
+});
+
+test('Insert (Drive) wird validiert, migriert und serialisiert', () => {
+  const track = createTrack({ name: 'Crunch', insert: { drive: 0.35 } });
+  const project = createProject({ tracks: [track], activeTrackId: track.id });
+  const back = deserialize(JSON.stringify(serialize(project)));
+  assert(back.ok, back.errors.join(' | '));
+  eq(back.project.tracks[0].insert.drive, 0.35);
+
+  const raw = serialize(project);
+  raw.tracks[0].insert.drive = 2;
+  const bad = validateProject(raw);
+  assert(!bad.ok);
+  assert(bad.errors.join(' ').includes('insert.drive'), bad.errors.join(' | '));
+
+  const warn = serialize(project);
+  warn.tracks[0].insert.chorus = 1;
+  const warned = validateProject(warn);
+  assert(warned.ok, warned.errors.join(' | '));
+  assert(warned.warnings.some((w) => w.includes('insert.chorus')), warned.warnings.join(' | '));
+
+  const v3 = serialize(project);
+  v3.version = 3;
+  delete v3.tracks[0].insert;
+  const migrated = deserialize(JSON.stringify(v3));
+  assert(migrated.ok, migrated.errors.join(' | '));
+  eq(migrated.migratedFrom, 3);
+  eq(migrated.project.tracks[0].insert.drive, 0);
 });

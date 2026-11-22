@@ -7,10 +7,10 @@
 import { Clip } from './clip.js';
 import { buildPatch, getIn, PATCH_RANGES, PATCH_ENUMS, SOURCES, DESTS, DEFAULT_PATCH } from './state.js';
 
-export const PROJECT_VERSION = 3;
+export const PROJECT_VERSION = 4;
 
 /** Versionen, die beim Laden übernommen werden (ältere werden migriert). */
-export const SUPPORTED_VERSIONS = [1, 2, 3];
+export const SUPPORTED_VERSIONS = [1, 2, 3, 4];
 
 /** Instrumenttypen einer Spur. `synth` nutzt den Patch, `piano`/`drums` eigene Stimmen. */
 export const INSTRUMENTS = [
@@ -175,6 +175,9 @@ export const BEATS_PER_BAR = 4;
 
 export const MIDI_DEFAULTS = { binds: [] };
 
+/** Insert-Effekt je Spur: Sättigung mit Makeup-Gain (0 = aus). */
+export const INSERT_DEFAULTS = { drive: 0 };
+
 export const LIMITS = {
   maxTracks: 8,
   maxEventsPerTrack: 5000,
@@ -194,6 +197,7 @@ export const LIMITS = {
   minReverbSize: 0.3,
   maxReverbSize: 8,
   maxMidiBinds: 32,
+  maxDrive: 1,
 };
 
 export const QUANTIZE_STEPS = [0, 60, 120, 240]; // OFF, 1/32, 1/16, 1/8 (PPQ 480)
@@ -210,6 +214,7 @@ const KNOWN_TRACK_KEYS = new Set([
   'solo',
   'gain',
   'sends',
+  'insert',
   'takes',
 ]);
 
@@ -237,7 +242,16 @@ const isInt = (v) => isNum(v) && Number.isInteger(v);
 
 /* ------------------------------------------------------------------ Fabriken */
 
-export function createTrack({ name, patch, id, gain = 0.8, patchName = 'Init', sends, instrument = 'synth' } = {}) {
+export function createTrack({
+  name,
+  patch,
+  id,
+  gain = 0.8,
+  patchName = 'Init',
+  sends,
+  insert,
+  instrument = 'synth',
+} = {}) {
   return {
     id: id || newId('trk'),
     name: name || 'Track',
@@ -248,6 +262,7 @@ export function createTrack({ name, patch, id, gain = 0.8, patchName = 'Init', s
     gain,
     instrument: INSTRUMENT_IDS.includes(instrument) ? instrument : 'synth',
     sends: { ...SEND_DEFAULTS, ...(sends || {}) },
+    insert: { ...INSERT_DEFAULTS, ...(insert || {}) },
     clip: new Clip(),
   };
 }
@@ -431,6 +446,28 @@ function validateEvents(rawTakes, path, loopTicks, errors) {
 
 /* ------------------------------------------------------- Send-/FX-Validierung */
 
+function validateInsert(raw, path, errors, warnings) {
+  const insert = { ...INSERT_DEFAULTS };
+  if (raw === undefined) return insert;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(`${path}: Objekt erwartet`);
+    return insert;
+  }
+  for (const key of Object.keys(raw)) {
+    if (!(key in INSERT_DEFAULTS)) {
+      warnings.push(`${path}.${key}: unbekanntes Feld ignoriert`);
+      continue;
+    }
+    const v = raw[key];
+    if (!isNum(v) || v < 0 || v > LIMITS.maxDrive) {
+      errors.push(`${path}.${key}: Zahl 0…${LIMITS.maxDrive} erwartet (${JSON.stringify(v)})`);
+      continue;
+    }
+    insert[key] = v;
+  }
+  return insert;
+}
+
 function validateSends(raw, path, errors, warnings) {
   const sends = { ...SEND_DEFAULTS };
   if (raw === undefined) return sends;
@@ -575,6 +612,17 @@ function migrateV1toV2(raw) {
   return out;
 }
 
+function migrateV3toV4(raw) {
+  const out = structuredClone(raw);
+  out.version = 4;
+  out.tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).map((t) => {
+    if (!t || typeof t !== 'object') return t;
+    const insert = t.insert && typeof t.insert === 'object' && !Array.isArray(t.insert) ? t.insert : {};
+    return { ...t, insert: { ...INSERT_DEFAULTS, ...insert } };
+  });
+  return out;
+}
+
 function migrateV2toV3(raw) {
   const out = structuredClone(raw);
   out.version = 3;
@@ -596,6 +644,7 @@ export function migrate(raw) {
   let out = raw;
   if (out.version === 1) out = migrateV1toV2(out);
   if (out.version === 2) out = migrateV2toV3(out);
+  if (out.version === 3) out = migrateV3toV4(out);
   return out;
 }
 
@@ -685,6 +734,7 @@ export function validateProject(raw) {
         if (!KNOWN_TRACK_KEYS.has(key)) warnings.push(`${at}.${key}: unbekanntes Feld ignoriert`);
       }
       const sends = validateSends(rt.sends, `${at}.sends`, errors, warnings);
+      const insert = validateInsert(rt.insert, `${at}.insert`, errors, warnings);
       const instrument = rt.instrument === undefined ? 'synth' : rt.instrument;
       if (!INSTRUMENT_IDS.includes(instrument)) {
         errors.push(`${at}.instrument: "${instrument}" nicht erlaubt (${INSTRUMENT_IDS.join(' / ')})`);
@@ -703,6 +753,7 @@ export function validateProject(raw) {
           solo,
           gain,
           sends,
+          insert,
           clip,
         });
       }
@@ -768,6 +819,7 @@ export function serialize(project) {
       solo: t.solo,
       gain: t.gain,
       sends: { ...SEND_DEFAULTS, ...(t.sends || {}) },
+      insert: { ...INSERT_DEFAULTS, ...(t.insert || {}) },
       patch: structuredClone(t.patch),
       takes: t.clip ? t.clip.toTakes() : [],
     })),

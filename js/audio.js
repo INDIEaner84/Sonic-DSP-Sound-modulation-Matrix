@@ -3,6 +3,8 @@
  * Der Klang kommt aus dem Patch der jeweiligen Spur; LFOs sind projektweit
  * (eine gemeinsame Phase für alle Spuren, siehe E-03 in der Entscheidungsliste).
  *
+ * Pro Spur sitzt außerdem ein Insert (Drive/Sättigung) zwischen Pan und Fader.
+ *
  * Die Modulationsmatrix läuft auf Control-Rate (60 Hz) in JS und schreibt
  * geglättete Werte über setTargetAtTime in die AudioParams. Noten können mit
  * exakter Startzeit (`when`) geplant werden – das nutzt der Sequencer.
@@ -117,6 +119,18 @@ class LFO {
         return 0;
     }
   }
+}
+
+/* ------------------------------------------------------------- Insert (Drive) */
+
+/** Weiche Sättigungskurve (tanh) – einmal gebaut, für alle Spuren wiederverwendet. */
+function buildDriveCurve(samples = 2048) {
+  const curve = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const x = (i / (samples - 1)) * 2 - 1;
+    curve[i] = Math.tanh(x * 2.2) / Math.tanh(2.2);
+  }
+  return curve;
 }
 
 /* ---------------------------------------------------------------- Quellen */
@@ -818,6 +832,9 @@ export class Engine {
         try {
           chain.input.disconnect();
           chain.pan.disconnect();
+          chain.driveIn.disconnect();
+          chain.shaper.disconnect();
+          chain.driveOut.disconnect();
           chain.gain.disconnect();
           chain.sendDelay.disconnect();
           chain.sendReverb.disconnect();
@@ -832,6 +849,14 @@ export class Engine {
       if (this.chains.has(track.id)) continue;
       const input = this.ctx.createGain();
       const pan = this.ctx.createStereoPanner();
+
+      /* Insert: Vorverstärkung → Sättigung → Makeup, dazwischen der Fader. */
+      const driveIn = this.ctx.createGain();
+      const shaper = this.ctx.createWaveShaper();
+      shaper.curve = this._driveCurve || (this._driveCurve = buildDriveCurve());
+      shaper.oversample = '2x';
+      const driveOut = this.ctx.createGain();
+
       const gain = this.ctx.createGain();
       gain.gain.value = trackAudible(track, this.project.tracks) ? track.gain : 0;
 
@@ -842,14 +867,27 @@ export class Engine {
       sendReverb.gain.value = clamp((track.sends && track.sends.reverb) || 0, 0, 1);
 
       input.connect(pan);
-      pan.connect(gain);
+      pan.connect(driveIn);
+      driveIn.connect(shaper);
+      shaper.connect(driveOut);
+      driveOut.connect(gain);
       gain.connect(this.bus);
       gain.connect(sendDelay);
       gain.connect(sendReverb);
       sendDelay.connect(this.delayIn);
       sendReverb.connect(this.reverbIn);
 
-      this.chains.set(track.id, { track, input, pan, gain, sendDelay, sendReverb });
+      this.chains.set(track.id, {
+        track,
+        input,
+        pan,
+        driveIn,
+        shaper,
+        driveOut,
+        gain,
+        sendDelay,
+        sendReverb,
+      });
     }
   }
 
@@ -895,6 +933,9 @@ export class Engine {
       const sends = chain.track.sends || {};
       chain.sendDelay.gain.setTargetAtTime(clamp(sends.delay || 0, 0, 1), now, 0.03);
       chain.sendReverb.gain.setTargetAtTime(clamp(sends.reverb || 0, 0, 1), now, 0.03);
+      const drive = clamp((chain.track.insert && chain.track.insert.drive) || 0, 0, 1);
+      chain.driveIn.gain.setTargetAtTime(1 + drive * 7, now, 0.03);
+      chain.driveOut.gain.setTargetAtTime(1 / (1 + drive * 2.4), now, 0.03);
     }
 
     this._applyFxSettings(now);

@@ -119,6 +119,12 @@ Pads lassen sich mit der Maus, der Rechner-Tastatur und über MIDI spielen; im A
 landen Pad-Schläge als Noten im Loop der aktiven Spur. Ist die aktive Spur eine Drum-Spur,
 spielt die Rechner-Tastatur (`A S D F …`) direkt die Pads statt Tonhöhen.
 
+### Status-Panel (Browser-Abnahme)
+
+Zeigt live: Audio-Zustand und Samplerate, Projekt (Schema-Version, Spuren, Noten), MIDI
+(verbunden/Anzahl), WAV-Mitschnitt (verfügbar) und den Autosave-Zustand. Damit lässt sich
+beim manuellen Test in zwei Sekunden sehen, was der Browser tatsächlich kann.
+
 ### MIDI-Controller (z. B. Nektar Impact)
 
 | Element | Wirkung |
@@ -144,6 +150,7 @@ Geräts.
 | Element | Wirkung |
 | --- | --- |
 | **DLY / REV** in der Spurzeile | Send-Anteil dieser Spur (post-fader, also von Mute/Solo erfasst) |
+| **DRV** in der Spurzeile | Drive-Insert der Spur (Sättigung mit Makeup, wirkt vor dem Fader) |
 | **DELAY** (Auswahl) | Raster der Delay-Zeit: 1/16 … 1/2, folgt dem Tempo |
 | **FEEDBACK** | Rückkopplung des Delays (0–85 %, höher = riskanter) |
 | **TONE** | Tiefpass im Delay-Rückweg (300 Hz … 9 kHz) |
@@ -151,6 +158,8 @@ Geräts.
 | **DAMP** | Dämpfung des Reverb-Rückwegs |
 
 Die Sends liegen hinter dem Fader: ein stumm geschalteter Kanal läuft nicht in die Effekte.
+Der Drive-Insert sitzt dagegen **vor** dem Fader (Pan → Drive → Fader), damit der Pegel das
+Anzerren nicht wieder herausrechnet.
 Ein Wechsel der Wellenform wirkt nur auf neu startende Noten; laufende Rausch-Stimmen
 behalten ihre Quelle bis zum Ende der Note.
 
@@ -195,8 +204,8 @@ die Note-Logik — dadurch bleiben geplante Releases konsistent.
 ## Tests
 
 ```bash
-npm test           # 116 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
-npm run test:ui    # zusätzlich 23 jsdom-Integrationstests (139 gesamt)
+npm test           # 119 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
+npm run test:ui    # zusätzlich 25 jsdom-Integrationstests (144 gesamt)
 ```
 
 Die Tests laufen ohne Framework (`node:test`-frei, eigener Mini-Runner in
@@ -215,7 +224,8 @@ komplette UI-Fluss (Spur anlegen, umbenennen, aufnehmen, exportieren, importiere
 | E4 | Effekt-Sends (Delay/Reverb), Rausch-Oszillator, zusätzliche Presets | fertig |
 | E5 | Mix-Mitschnitt als WAV | fertig (Browser-Teil manuell zu prüfen) |
 | E6 | Instrumente je Spur (Klavier, Drum-Kit, Pads), Web-MIDI-Eingang mit CC-Learn | fertig (Web MIDI nur im Browser prüfbar) |
-| E7 | SoundFont-/Sample-Instrumente (`smplr`), Spur-Inserts, Song-Modus | offen |
+| E7 | Spur-Insert (Drive) und Status-Panel | fertig |
+| E8 | SoundFont-Instrumente (`smplr`) und Song-Modus | geplant, siehe `docs/SOUNDFONT-PLAN.md` und `docs/PLAN-SONG-MODUS.md` |
 
 Details und Begründungen: `docs/KOMPONIEREN-KONZEPT.md`, offene Punkte und
 Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`.

@@ -1,9 +1,10 @@
-# Probleme, Befunde und Entscheidungen (Wellen 2–6)
+# Probleme, Befunde und Entscheidungen (Wellen 2–7)
 
 Stand: Branch `arena/63e00fdc-sonic-dsp-sound-modulation-mat`, Basis `7afa23b`.
 Bezug: `docs/PLAN-WELLE-2-3.md` (P2.1–P2.6, P3.1–P3.3, P4.1–P4.3),
 `docs/PLAN-WELLE-4-5.md` (P4.1–P4.5, P5.1–P5.3) und
-`docs/PLAN-WELLE-6.md` (P6.1–P6.5).
+`docs/PLAN-WELLE-6.md` (P6.1–P6.5) sowie die Pläne `docs/SOUNDFONT-PLAN.md` und
+`docs/PLAN-SONG-MODUS.md`.
 Dieses Dokument hält fest, **was entschieden wurde, warum, mit welcher Folge** und
 **was noch offen oder nur teilweise geprüft ist**.
 
@@ -108,8 +109,8 @@ der Server bleibt `require`-basiert und dependency-frei. `npm start` ist unverä
 
 | Prüfung | Kommando | Ergebnis |
 | --- | --- | --- |
-| Unit-/Integrationstests | `npm test` | **116/116** |
-| inkl. UI (jsdom) | `npm run test:ui` | **139/139** |
+| Unit-/Integrationstests | `npm test` | **119/119** |
+| inkl. UI (jsdom) | `npm run test:ui` | **144/144** |
 | Syntax aller Module | `node --check js/*.js` | fehlerfrei |
 | Server-Smoke | `node server.cjs` + `curl /` | 200, korrekte Content-Types |
 | Browser-Verhalten (Klang, Layout) | manuell | **nicht** automatisiert prüfbar (jsdom ohne Canvas/Audio) |
@@ -152,7 +153,10 @@ blockiert). WAV-Bounce und Spur-Effekte = **B** (bewusst zurückgestellt).
 6. **Web MIDI** ist nur im Browser prüfbar (Berechtigung, Geräteliste). Ohne Zugriff bleibt
    das Panel bei „AUS“; Tastatur, Pads, Aufnahme und Export sind davon unberührt.
 7. **Klavier/Drums sind synthetisch**: ein sample-basiertes Instrument (SF2/`smplr`) ist der
-   nächste sinnvolle Schritt, braucht aber Assets und eine Lizenzentscheidung (Kategorie C).
+   nächste sinnvolle Schritt, braucht aber Assets und eine Lizenzentscheidung (Kategorie C);
+   Einbauplan: `docs/SOUNDFONT-PLAN.md`.
+8. **Song-Modus fehlt**: ein Loop pro Projekt. Zuschnitt, Datenmodell und Tests liegen in
+   `docs/PLAN-SONG-MODUS.md`.
 
 ## Entscheidungen Welle 4 + 5
 
@@ -336,3 +340,55 @@ Jeder Schritt ist additiv und einzeln getestet.
 | P6.3 MIDI-Parser/Router/Learn | vollständig abgenommen (Node-Tests); Browser-Zugriff manuell |
 | P6.4 UI (Instrument, Pads, MIDI-Panel) | umgesetzt, UI-getestet |
 | P6.5 Doku | fertig |
+
+## Entscheidungen Welle 7
+
+### E-24 — Drive als Insert **vor** dem Fader
+
+`track.insert.drive` (0…1) schaltet eine Sättigungskette `Pan → Vorverstärkung →
+WaveShaper (tanh) → Makeup → Fader` in jede Spurkette. Die Kurve wird einmal pro Engine
+gebaut und geteilt; Vorverstärkung und Makeup folgen dem Spurwert im Control-Rate-Takt.
+
+**Begründung:** Ein Insert vor dem Fader ist musikalisch der Unterschied zwischen
+„Zerre“ und „lauter“; hinter dem Fader würde ein leiser Kanal nicht anzerren. Die Sends
+bleiben post-fader, damit Effekte weiterhin der Mute/Solo-Regel folgen.
+
+**Folge:** Schema v4 (Migration v3 → v4 additiv), Drive ist pro Spur im Projekt gespeichert
+und über den Regler `DRV` bedienbar.
+
+### E-25 — Status-Panel statt „Browser-Abnahme nach Gefühl“
+
+Das Panel zeigt live Audio-Zustand/Samplerate, Schema-Version mit Spuren und Notenzahl,
+MIDI-Verbindung, Verfügbarkeit des WAV-Mitschnitts und den Autosave-Zustand.
+
+**Begründung:** Die einzige verbleibende Abnahme (Klang, Layout, echter Mitschnitt) kann nur
+im Browser passieren. Ein sichtbarer Systemstatus macht in Sekunden klar, ob Web Audio,
+Web MIDI und `MediaRecorder` dort verfügbar sind, statt es aus Symptomen zu raten.
+
+**Folge:** `renderDiagnostics()` wird bei Zustands- und UI-Änderungen aktualisiert und
+vermeidet DOM-Churn über einen Cache-Schlüssel.
+
+### E-26 — Song-Modus bleibt eine eigene Welle (Plan liegt vor)
+
+Ein Arrangement über mehrere Szenen braucht ein neues Datenmodell (Szenen, Kette), einen
+Lookahead-fähigen Szenenwechsel in der Clock und eine neue Szenen-/Ketten-UI. Diesen Umbau
+„nebenbei“ zu beginnen, würde Clip, Clock, UI und Export gleichzeitig halbfertig machen.
+
+**Folge:** `docs/PLAN-SONG-MODUS.md` beschreibt Datenmodell (Schema v5), Auswirkungen je
+Schicht, fünf Pakete, Tests und Rücknahme. Die App ist ohne Song-Modus vollständig nutzbar.
+
+### E-27 — SoundFont bleibt Kategorie C (Plan liegt vor)
+
+`docs/SOUNDFONT-PLAN.md` hält Optionen mit geprüften Lizenzen (smplr MIT, js-synthesizer
+BSD-3, spessasynth Apache-2.0, webaudio-tinysynth Apache-2.0), den Einbau als weiteres
+Instrument über die bestehende Stimmen-Schnittstelle und die Abnahmekriterien fest.
+Ohne freigegebene Assets wird nichts davon vorgetäuscht.
+
+## Status Welle 7
+
+| Paket | Status |
+| --- | --- |
+| P7.1 Schema v4 + Drive-Insert (Engine) | vollständig abgenommen |
+| P7.2 Drive-Regler in der Spurenliste | umgesetzt, UI-getestet |
+| P7.3 Status-Panel | umgesetzt, UI-getestet |
+| P7.4 Pläne für Song-Modus und SoundFont | fertig (Kategorie B bzw. C) |

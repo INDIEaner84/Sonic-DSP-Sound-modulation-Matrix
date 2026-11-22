@@ -127,6 +127,14 @@ export class FakeConvolver extends BaseNode {
   }
 }
 
+export class FakeWaveShaper extends BaseNode {
+  constructor(ctx) {
+    super(ctx);
+    this.curve = null;
+    this.oversample = 'none';
+  }
+}
+
 export class FakePanner extends BaseNode {
   constructor(ctx) {
     super(ctx);
@@ -198,6 +206,9 @@ export class FakeAudioContext {
     const d = new FakeDelay(this, maxDelay);
     this.created.delays.push(d);
     return d;
+  }
+  createWaveShaper() {
+    return new FakeWaveShaper(this);
   }
   createConvolver() {
     const c = new FakeConvolver(this);

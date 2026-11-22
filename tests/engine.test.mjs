@@ -345,3 +345,33 @@ test('refreshVoices lässt Piano- und Drum-Stimmen unangetastet', async () => {
   engine.tick();
   assert(!piano.dead || piano.triggered, 'Piano-Stimme darf nicht abrupt enden');
 });
+
+test('Drive-Insert sitzt zwischen Pan und Fader und folgt dem Spurwert', async () => {
+  const { engine, ctx, a } = await setup();
+  const chain = engine.chains.get(a.id);
+  assert(chain.shaper, 'Waveshaper fehlt');
+  assert(chain.pan.connections.includes(chain.driveIn), 'pan→driveIn fehlt');
+  assert(chain.driveOut.connections.includes(chain.gain), 'driveOut→gain fehlt');
+  assert(Array.isArray(chain.shaper.curve) || chain.shaper.curve instanceof Float32Array, 'Kurve fehlt');
+
+  a.insert.drive = 0;
+  ctx.advance(0.02);
+  engine.tick();
+  near(chain.driveIn.gain.value, 1, 1e-6);
+  near(chain.driveOut.gain.value, 1, 1e-6);
+
+  a.insert.drive = 0.5;
+  ctx.advance(0.02);
+  engine.tick();
+  near(chain.driveIn.gain.value, 4.5, 1e-6, 'Vorverstärkung');
+  near(chain.driveOut.gain.value, 1 / (1 + 0.5 * 2.4), 1e-6, 'Makeup');
+});
+
+test('Drive-Kurve bleibt innerhalb ±1', async () => {
+  const { engine, a } = await setup();
+  const curve = engine.chains.get(a.id).shaper.curve;
+  assert(curve.length > 1000, 'Kurve zu klein');
+  assert(Math.abs(curve[0]) <= 1 && Math.abs(curve[curve.length - 1]) <= 1, 'Kurve überschreitet ±1');
+  const mid = curve[Math.floor(curve.length / 2)];
+  assert(Math.abs(mid) < 0.05, 'Mitte muss nahe 0 liegen');
+});

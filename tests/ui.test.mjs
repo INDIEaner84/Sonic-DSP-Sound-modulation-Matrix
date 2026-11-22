@@ -322,6 +322,31 @@ if (!JSDOM) {
     eq(project.tracks.length, 1);
   });
 
+  test('Drive-Regler schreibt den Insert der Spur', async () => {
+    const row = q('.track-row')[0];
+    const drive = row.querySelector('.track-send-input.drive');
+    assert(drive, 'Drive-Regler fehlt');
+    eq(Number(drive.value), project.tracks[0].insert.drive);
+    drive.value = '0.6';
+    drive.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await wait(10);
+    eq(project.tracks[0].insert.drive, 0.6);
+    drive.value = '0.6';
+    drive.dispatchEvent(new window.Event('input', { bubbles: true }));
+    eq(project.tracks[0].insert.drive, 0.6, 'Wert bleibt stabil');
+  });
+
+  test('Status-Panel zeigt Audio, Schema und Mitschnitt', async () => {
+    const diag = doc.getElementById('diag');
+    assert(diag, 'Status-Panel fehlt');
+    const text = diag.textContent;
+    assert(text.includes('Schema v'), 'Schema fehlt: ' + text);
+    assert(text.includes(String(PROJECT_VERSION)), 'Version fehlt: ' + text);
+    assert(text.includes('WAV-Mitschnitt'), text);
+    assert(text.includes('MIDI'), text);
+    assert(diag.querySelectorAll('.diag-row').length >= 4);
+  });
+
   test('Instrument je Spur umschalten (Synth/Piano/Drums)', async () => {
     const row = q('.track-row')[0];
     const select = row.querySelector('.track-instrument-select');

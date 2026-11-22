@@ -2126,3 +2126,32 @@ body.is-recording .loop-progress i {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* --------------------------------------------------------------- Diagnose */
+
+.diag {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.diag-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+}
+
+.diag-key {
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.diag-value {
+  color: #b9cada;
+  text-align: right;
+}
