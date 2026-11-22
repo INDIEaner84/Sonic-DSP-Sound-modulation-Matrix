@@ -91,7 +91,7 @@ zeigt die Noten farbig pro Take und den Playhead.
 | **Neu** | leeres Projekt (mit Rückfrage) |
 | **MIDI Export** | Standard-MIDI-Datei (Format 1), Wiederholungen 1–16 wählbar |
 | **MIDI Import** | MIDI-Datei als Projekt übernehmen (max. 8 Spuren) |
-| **Mix ⤓ WAV** | nimmt die laufende Ausgabe in Echtzeit auf (1/2/4 Loops + Ausklang) und speichert sie als WAV |
+| **Mix ⤓ WAV** | nimmt die laufende Ausgabe in Echtzeit auf (1/2/4 Loops + Ausklang) und speichert sie als WAV; das Metronom ist dabei stumm |
 
 Autosave: jede Änderung wird nach 700 ms in `localStorage` geschrieben
 (`sonicdsp.project.v1`) und beim nächsten Start automatisch geladen (Statusanzeige neben

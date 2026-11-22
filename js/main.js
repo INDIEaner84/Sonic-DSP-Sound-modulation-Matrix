@@ -622,6 +622,9 @@ async function bounceMix() {
   const label = bounceBtn ? bounceBtn.textContent : '';
   if (bounceBtn) bounceBtn.disabled = true;
 
+  /* Metronom gehört nicht in den Mix: während des Mitschnitts stumm schalten. */
+  const metroWasOn = project.metronome;
+  project.metronome = false;
   clock.stop();
   clock.panic();
   clock.start();
@@ -635,6 +638,7 @@ async function bounceMix() {
     });
   } finally {
     clock.stop();
+    project.metronome = metroWasOn;
     if (bounceBtn) {
       bounceBtn.disabled = false;
       bounceBtn.textContent = label || 'Mix ⤓ WAV';

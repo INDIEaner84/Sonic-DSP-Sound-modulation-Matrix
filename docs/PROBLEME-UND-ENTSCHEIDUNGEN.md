@@ -211,7 +211,9 @@ parallel zu pflegenden Synthesepfad (AudioParam-Automation) erzwingen — genau 
 Wahrheitsquelle, die dieses Projekt vermeidet. Der Mitschnitt benutzt deshalb die echte
 Kette und kostet Zeit in Echtzeit (1/2/4 Loops + 1,6 s Ausklang).
 
-**Grenzen:** `MediaRecorder` nötig (Chrome/Firefox: ja); Ausgabe muss hörbar geroutet sein;
+**Grenzen:** `MediaRecorder` nötig (Chrome/Firefox: ja); das Metronom wird für die Dauer
+des Mitschnitts stummgeschaltet (es hängt am Master und wäre sonst im Mix); die Ausgabe
+muss hörbar geroutet sein;
 das Ergebnis ist so gut wie die laufende Session (keine Offline-Genauigkeit, kein
 Sample-Accurate-Bounce bei Überlastung).
 
