@@ -1816,3 +1816,130 @@ body.is-recording .loop-progress i {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------- FX & Sends */
+
+.fx-strip {
+  margin-top: 6px;
+  padding: 8px 9px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(84, 215, 199, 0.16);
+  background: rgba(84, 215, 199, 0.04);
+}
+
+.fx-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.fx-head h3 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--cyan);
+}
+
+.fx-hint {
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.fx-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fx-select {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+}
+
+.fx-knobs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  justify-content: space-between;
+}
+
+.fx-knobs .knob-wrap {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.fx-knobs .knob {
+  width: 34px;
+  height: 34px;
+}
+
+.track-sends {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  padding: 0 2px 1px 26px;
+}
+
+.track-send {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 7.5px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.track-row.active .track-send {
+  color: rgba(84, 215, 199, 0.85);
+}
+
+.track-send input[type='range'] {
+  width: 62px;
+  height: 12px;
+  appearance: none;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+.track-send input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(84, 215, 199, 0.5), rgba(255, 255, 255, 0.08));
+}
+
+.track-send input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 8px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #3b4652, #232b34);
+  border: 1px solid #586675;
+}
+
+.track-send input[type='range']::-moz-range-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.track-send input[type='range']::-moz-range-thumb {
+  width: 8px;
+  height: 12px;
+  border-radius: 2px;
+  background: #2d3742;
+  border: 1px solid #586675;
+}

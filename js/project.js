@@ -7,8 +7,37 @@
 import { Clip } from './clip.js';
 import { buildPatch, getIn, PATCH_RANGES, PATCH_ENUMS, SOURCES, DESTS, DEFAULT_PATCH } from './state.js';
 
-export const PROJECT_VERSION = 1;
-export const STORAGE_KEY = 'sonicdsp.project.v1';
+export const PROJECT_VERSION = 2;
+
+/** Versionen, die beim Laden übernommen werden (ältere werden migriert). */
+export const SUPPORTED_VERSIONS = [1, 2];
+
+/** Schema-2-Felder für die Migration aus Version 1. */
+export const SEND_DEFAULTS = { delay: 0.12, reverb: 0.18 };
+
+export const DELAY_DIVISIONS = ['1/16', '1/8', '3/16', '1/4', '3/8', '1/2'];
+
+/** Delay-Raster in Schlägen (1/4 = ein Schlag). */
+export const DELAY_DIVISION_BEATS = {
+  '1/16': 0.25,
+  '1/8': 0.5,
+  '3/16': 0.75,
+  '1/4': 1,
+  '3/8': 1.5,
+  '1/2': 2,
+};
+
+export const FX_DEFAULTS = {
+  delayDivision: '1/8',
+  delayFeedback: 0.3,
+  delayTone: 3200,
+  reverbSize: 2.2,
+  reverbDamp: 0.45,
+};
+
+export const STORAGE_KEY = 'sonicdsp.project';
+/** Frühere Schlüssel; werden beim Laden noch gelesen und dann in den neuen überführt. */
+export const LEGACY_STORAGE_KEYS = ['sonicdsp.project.v1'];
 export const PPQ = 480;
 export const BEATS_PER_BAR = 4;
 
@@ -24,12 +53,20 @@ export const LIMITS = {
   maxProjectName: 40,
   maxTrackName: 24,
   maxGain: 1.5,
+  maxSend: 1,
+  maxDelayFeedback: 0.85,
+  minDelayTone: 300,
+  maxDelayTone: 9000,
+  minReverbSize: 0.3,
+  maxReverbSize: 8,
 };
 
 export const QUANTIZE_STEPS = [0, 60, 120, 240]; // OFF, 1/32, 1/16, 1/8 (PPQ 480)
 
 const SOURCE_IDS = new Set(SOURCES.map((s) => s.id));
 const DEST_IDS = new Set(DESTS.map((d) => d.id));
+const KNOWN_TRACK_KEYS = new Set(['id', 'name', 'patchName', 'patch', 'mute', 'solo', 'gain', 'sends', 'takes']);
+
 const TOP_LEVEL_PATCH_KEYS = new Set([
   'glide',
   'osc1',
@@ -54,7 +91,7 @@ const isInt = (v) => isNum(v) && Number.isInteger(v);
 
 /* ------------------------------------------------------------------ Fabriken */
 
-export function createTrack({ name, patch, id, gain = 0.8, patchName = 'Init' } = {}) {
+export function createTrack({ name, patch, id, gain = 0.8, patchName = 'Init', sends } = {}) {
   return {
     id: id || newId('trk'),
     name: name || 'Track',
@@ -63,6 +100,7 @@ export function createTrack({ name, patch, id, gain = 0.8, patchName = 'Init' } 
     mute: false,
     solo: false,
     gain,
+    sends: { ...SEND_DEFAULTS, ...(sends || {}) },
     clip: new Clip(),
   };
 }
@@ -81,8 +119,15 @@ export function createProject(overrides = {}) {
     master: overrides.master != null ? overrides.master : 0.72,
     modWheel: overrides.modWheel || 0,
     activeTrackId: overrides.activeTrackId || tracks[0].id,
+    fx: { ...FX_DEFAULTS, ...(overrides.fx || {}) },
     tracks,
   };
+}
+
+/** Delay-Zeit in Sekunden aus Raster und Tempo (eine Quelle für Engine und UI). */
+export function delaySeconds(project) {
+  const beats = DELAY_DIVISION_BEATS[project.fx && project.fx.delayDivision] ?? 0.5;
+  return (beats * 60) / project.bpm;
 }
 
 /** Gemeinsame Mute/Solo-Regel für Clock und Engine. */
@@ -232,9 +277,110 @@ function validateEvents(rawTakes, path, loopTicks, errors) {
   return takes;
 }
 
+/* ------------------------------------------------------- Send-/FX-Validierung */
+
+function validateSends(raw, path, errors, warnings) {
+  const sends = { ...SEND_DEFAULTS };
+  if (raw === undefined) return sends;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(`${path}: Objekt erwartet`);
+    return sends;
+  }
+  for (const key of Object.keys(raw)) {
+    if (!(key in SEND_DEFAULTS)) {
+      warnings.push(`${path}.${key}: unbekanntes Feld ignoriert`);
+      continue;
+    }
+    const v = raw[key];
+    if (!isNum(v) || v < 0 || v > LIMITS.maxSend) {
+      errors.push(`${path}.${key}: Zahl 0…${LIMITS.maxSend} erwartet (${JSON.stringify(v)})`);
+      continue;
+    }
+    sends[key] = v;
+  }
+  return sends;
+}
+
+function validateFx(raw, errors, warnings) {
+  const fx = { ...FX_DEFAULTS };
+  if (raw === undefined) return fx;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push('fx: Objekt erwartet');
+    return fx;
+  }
+  for (const key of Object.keys(raw)) {
+    if (!(key in FX_DEFAULTS)) {
+      warnings.push(`fx.${key}: unbekanntes Feld ignoriert`);
+      continue;
+    }
+    const v = raw[key];
+    switch (key) {
+      case 'delayDivision':
+        if (!DELAY_DIVISIONS.includes(v)) {
+          errors.push(`fx.delayDivision: "${v}" nicht erlaubt (${DELAY_DIVISIONS.join(' / ')})`);
+        } else {
+          fx.delayDivision = v;
+        }
+        break;
+      case 'delayFeedback':
+        if (!isNum(v) || v < 0 || v > LIMITS.maxDelayFeedback) {
+          errors.push(`fx.delayFeedback: Zahl 0…${LIMITS.maxDelayFeedback} erwartet (${v})`);
+        } else {
+          fx.delayFeedback = v;
+        }
+        break;
+      case 'delayTone':
+        if (!isNum(v) || v < LIMITS.minDelayTone || v > LIMITS.maxDelayTone) {
+          errors.push(`fx.delayTone: Zahl ${LIMITS.minDelayTone}…${LIMITS.maxDelayTone} Hz erwartet (${v})`);
+        } else {
+          fx.delayTone = v;
+        }
+        break;
+      case 'reverbSize':
+        if (!isNum(v) || v < LIMITS.minReverbSize || v > LIMITS.maxReverbSize) {
+          errors.push(`fx.reverbSize: Zahl ${LIMITS.minReverbSize}…${LIMITS.maxReverbSize} s erwartet (${v})`);
+        } else {
+          fx.reverbSize = v;
+        }
+        break;
+      case 'reverbDamp':
+        if (!isNum(v) || v < 0 || v > 1) {
+          errors.push(`fx.reverbDamp: Zahl 0…1 erwartet (${v})`);
+        } else {
+          fx.reverbDamp = v;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return fx;
+}
+
+/**
+ * Hebt ein älteres Projekt auf das aktuelle Schema (nur additive Defaults,
+ * nichts wird entfernt oder umgedeutet). Unbekannte Versionen bleiben unverändert
+ * und werden von `validateProject` abgelehnt.
+ */
+export function migrate(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  if (raw.version === 1) {
+    const out = structuredClone(raw);
+    out.version = 2;
+    out.fx = { ...FX_DEFAULTS, ...(raw.fx && typeof raw.fx === 'object' && !Array.isArray(raw.fx) ? raw.fx : {}) };
+    out.tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).map((t) => {
+      if (!t || typeof t !== 'object') return t;
+      const sends = t.sends && typeof t.sends === 'object' && !Array.isArray(t.sends) ? t.sends : {};
+      return { ...t, sends: { ...SEND_DEFAULTS, ...sends } };
+    });
+    return out;
+  }
+  return raw;
+}
+
 /**
  * Prüft ein Rohobjekt (aus JSON) streng und baut daraus ein Laufzeit-Projekt.
- * @returns {{ok: boolean, project: object|null, errors: string[], warnings: string[]}}
+ * @returns {{ok: boolean, project: object|null, errors: string[], warnings: string[], migratedFrom?: number}}
  */
 export function validateProject(raw) {
   const errors = [];
@@ -243,53 +389,57 @@ export function validateProject(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ok: false, project: null, errors: ['Projektdatei: Objekt erwartet'], warnings };
   }
-  if (raw.version !== PROJECT_VERSION) {
+  if (!SUPPORTED_VERSIONS.includes(raw.version)) {
     return {
       ok: false,
       project: null,
-      errors: [`Projektversion ${JSON.stringify(raw.version)} wird nicht unterstützt (erwartet ${PROJECT_VERSION})`],
+      errors: [`Projektversion ${JSON.stringify(raw.version)} wird nicht unterstützt (erwartet ${SUPPORTED_VERSIONS.join(' oder ')})`],
       warnings,
     };
   }
 
+  const migratedFrom = raw.version !== PROJECT_VERSION ? raw.version : undefined;
+  const data = migratedFrom ? migrate(raw) : raw;
+  if (migratedFrom) warnings.push(`Projektversion ${migratedFrom} übernommen, neue Felder mit Standardwerten ergänzt`);
+
   const KNOWN_PROJECT_KEYS = new Set([
     'version', 'name', 'bpm', 'bars', 'quantizeStep', 'swing', 'metronome',
-    'master', 'modWheel', 'activeTrackId', 'tracks',
+    'master', 'modWheel', 'activeTrackId', 'fx', 'tracks',
   ]);
-  for (const key of Object.keys(raw)) {
+  for (const key of Object.keys(data)) {
     if (!KNOWN_PROJECT_KEYS.has(key)) warnings.push(`${key}: unbekanntes Feld ignoriert`);
   }
 
-  const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, LIMITS.maxProjectName) : 'Projekt';
-  const bpm = isNum(raw.bpm) ? Math.round(raw.bpm) : 120;
-  if (!isNum(raw.bpm) || bpm < LIMITS.minBpm || bpm > LIMITS.maxBpm) {
-    errors.push(`bpm: ${raw.bpm} außerhalb ${LIMITS.minBpm}…${LIMITS.maxBpm}`);
+  const name = typeof data.name === 'string' ? data.name.trim().slice(0, LIMITS.maxProjectName) : 'Projekt';
+  const bpm = isNum(data.bpm) ? Math.round(data.bpm) : 120;
+  if (!isNum(data.bpm) || bpm < LIMITS.minBpm || bpm > LIMITS.maxBpm) {
+    errors.push(`bpm: ${data.bpm} außerhalb ${LIMITS.minBpm}…${LIMITS.maxBpm}`);
   }
-  const bars = isNum(raw.bars) ? Math.round(raw.bars) : 4;
-  if (!isNum(raw.bars) || bars < LIMITS.minBars || bars > LIMITS.maxBars) {
-    errors.push(`bars: ${raw.bars} außerhalb ${LIMITS.minBars}…${LIMITS.maxBars}`);
+  const bars = isNum(data.bars) ? Math.round(data.bars) : 4;
+  if (!isNum(data.bars) || bars < LIMITS.minBars || bars > LIMITS.maxBars) {
+    errors.push(`bars: ${data.bars} außerhalb ${LIMITS.minBars}…${LIMITS.maxBars}`);
   }
-  const quantizeStep = isNum(raw.quantizeStep) ? raw.quantizeStep : 120;
-  if (!QUANTIZE_STEPS.includes(quantizeStep)) errors.push(`quantizeStep: ${raw.quantizeStep} nicht erlaubt`);
-  const swing = isNum(raw.swing) ? raw.swing : 0;
-  if (swing < 0 || swing > 0.6) errors.push(`swing: ${raw.swing} außerhalb 0…0.6`);
-  const master = isNum(raw.master) ? raw.master : 0.72;
-  if (master < 0 || master > 1) errors.push(`master: ${raw.master} außerhalb 0…1`);
-  const modWheel = isNum(raw.modWheel) ? raw.modWheel : 0;
-  if (modWheel < 0 || modWheel > 1) errors.push(`modWheel: ${raw.modWheel} außerhalb 0…1`);
+  const quantizeStep = isNum(data.quantizeStep) ? data.quantizeStep : 120;
+  if (!QUANTIZE_STEPS.includes(quantizeStep)) errors.push(`quantizeStep: ${data.quantizeStep} nicht erlaubt`);
+  const swing = isNum(data.swing) ? data.swing : 0;
+  if (swing < 0 || swing > 0.6) errors.push(`swing: ${data.swing} außerhalb 0…0.6`);
+  const master = isNum(data.master) ? data.master : 0.72;
+  if (master < 0 || master > 1) errors.push(`master: ${data.master} außerhalb 0…1`);
+  const modWheel = isNum(data.modWheel) ? data.modWheel : 0;
+  if (modWheel < 0 || modWheel > 1) errors.push(`modWheel: ${data.modWheel} außerhalb 0…1`);
 
-  const loopTicks = (isNum(raw.bars) ? bars : 4) * BEATS_PER_BAR * PPQ;
+  const loopTicks = (isNum(data.bars) ? bars : 4) * BEATS_PER_BAR * PPQ;
 
-  if (!Array.isArray(raw.tracks) || raw.tracks.length === 0) {
+  if (!Array.isArray(data.tracks) || data.tracks.length === 0) {
     errors.push('tracks: mindestens eine Spur erwartet');
-  } else if (raw.tracks.length > LIMITS.maxTracks) {
+  } else if (data.tracks.length > LIMITS.maxTracks) {
     errors.push(`tracks: mehr als ${LIMITS.maxTracks} Spuren`);
   }
 
   const tracks = [];
   const ids = new Set();
-  if (Array.isArray(raw.tracks)) {
-    raw.tracks.forEach((rt, i) => {
+  if (Array.isArray(data.tracks)) {
+    data.tracks.forEach((rt, i) => {
       const at = `tracks[${i}]`;
       if (!rt || typeof rt !== 'object' || Array.isArray(rt)) {
         errors.push(`${at}: Objekt erwartet`);
@@ -310,18 +460,24 @@ export function validateProject(raw) {
       const gain = isNum(rt.gain) ? rt.gain : 0.8;
       if (gain < 0 || gain > LIMITS.maxGain) errors.push(`${at}.gain: ${rt.gain} außerhalb 0…${LIMITS.maxGain}`);
 
+      for (const key of Object.keys(rt)) {
+        if (!KNOWN_TRACK_KEYS.has(key)) warnings.push(`${at}.${key}: unbekanntes Feld ignoriert`);
+      }
+      const sends = validateSends(rt.sends, `${at}.sends`, errors, warnings);
       const takes = validateEvents(rt.takes, `${at}.takes`, loopTicks, errors);
       const clip = Clip.fromTakes(takes);
 
-      if (patch) tracks.push({ id, name: trackName, patchName, patch, mute, solo, gain, clip });
+      if (patch) tracks.push({ id, name: trackName, patchName, patch, mute, solo, gain, sends, clip });
     });
   }
 
-  let activeTrackId = raw.activeTrackId;
+  let activeTrackId = data.activeTrackId;
   if (!tracks.some((t) => t.id === activeTrackId)) {
     if (tracks.length) warnings.push('activeTrackId: unbekannt, erste Spur gewählt');
     activeTrackId = tracks.length ? tracks[0].id : null;
   }
+
+  const fx = validateFx(data.fx, errors, warnings);
 
   if (errors.length) return { ok: false, project: null, errors, warnings };
 
@@ -336,12 +492,14 @@ export function validateProject(raw) {
       bars,
       quantizeStep,
       swing,
-      metronome: raw.metronome !== false,
+      metronome: data.metronome !== false,
       master,
       modWheel,
       activeTrackId,
+      fx,
       tracks,
     },
+    migratedFrom,
   };
 }
 
@@ -350,6 +508,7 @@ export function validateProject(raw) {
 export function serialize(project) {
   return {
     version: PROJECT_VERSION,
+    fx: { ...FX_DEFAULTS, ...(project.fx || {}) },
     name: project.name,
     bpm: project.bpm,
     bars: project.bars,
@@ -366,6 +525,7 @@ export function serialize(project) {
       mute: t.mute,
       solo: t.solo,
       gain: t.gain,
+      sends: { ...SEND_DEFAULTS, ...(t.sends || {}) },
       patch: structuredClone(t.patch),
       takes: t.clip ? t.clip.toTakes() : [],
     })),
@@ -402,22 +562,47 @@ export function saveLocal(project, storage = storageOrNull()) {
   if (!storage) return { ok: false, error: 'Kein lokaler Speicher verfügbar' };
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify(serialize(project)));
-    return { ok: true, at: new Date() };
   } catch (err) {
-    return { ok: false, error: 'Speichern fehlgeschlagen: ' + err.message };
+    const quota = err && (err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014);
+    return {
+      ok: false,
+      error: quota
+        ? 'Speicher voll – Projekt als JSON-Datei sichern'
+        : 'Speichern fehlgeschlagen: ' + err.message,
+    };
   }
+  /* Alt-Schlüssel erst nach erfolgreichem Schreiben aufräumen. */
+  for (const legacy of LEGACY_STORAGE_KEYS) {
+    try {
+      storage.removeItem(legacy);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  return { ok: true, at: new Date() };
 }
 
 export function loadLocal(storage = storageOrNull()) {
   if (!storage) return { ok: false, empty: true, errors: ['Kein lokaler Speicher verfügbar'] };
-  let text;
+  let text = null;
+  let key = STORAGE_KEY;
   try {
     text = storage.getItem(STORAGE_KEY);
+    if (!text) {
+      for (const legacy of LEGACY_STORAGE_KEYS) {
+        const candidate = storage.getItem(legacy);
+        if (candidate) {
+          text = candidate;
+          key = legacy;
+          break;
+        }
+      }
+    }
   } catch (err) {
     return { ok: false, empty: true, errors: [err.message] };
   }
   if (!text) return { ok: false, empty: true, errors: [] };
-  return deserialize(text);
+  return { ...deserialize(text), key, legacyKey: key !== STORAGE_KEY };
 }
 
 export function clearLocal(storage = storageOrNull()) {

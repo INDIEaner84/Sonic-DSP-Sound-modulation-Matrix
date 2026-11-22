@@ -57,7 +57,7 @@ test('Geplante Note startet erst zur Startzeit', async () => {
   ctx.advance(0.1);
   engine.tick();
   eq(v.triggered, false);
-  eq(v.osc1.startedAt, 0.5);
+  eq(v.src1.startedAt, 0.5);
   ctx.advance(0.45);
   engine.tick();
   eq(v.triggered, true);
@@ -144,5 +144,113 @@ test('refreshVoices setzt Wellenform je Spur', async () => {
   b.patch.osc1.wave = 'sine';
   engine.noteOn(b.id, 64, 0.8);
   engine.refreshVoices(a.id);
-  eq(v.osc1.type, 'square');
+  eq(v.src1.type, 'square');
+});
+
+/* --------------------------------------------------------------- Effekte */
+
+test('FX-Busse werden aufgebaut, Spuren hängen an den Sends', async () => {
+  const { engine, a, b } = await setup();
+  const chain = engine.chains.get(a.id);
+  assert(engine.delay && engine.convolver, 'FX-Busse fehlen');
+  assert(chain.sendDelay.connections.includes(engine.delayIn), 'Delay-Send nicht verbunden');
+  assert(chain.sendReverb.connections.includes(engine.reverbIn), 'Reverb-Send nicht verbunden');
+  assert(chain.gain.connections.includes(chain.sendDelay), 'Send nicht hinter dem Fader');
+  assert(engine.delayOut.connections.includes(engine.master), 'Delay-Return nicht am Master');
+  assert(engine.reverbOut.connections.includes(engine.master), 'Reverb-Return nicht am Master');
+  eq(engine.chains.size, 2);
+  assert(engine.chains.get(b.id).sendDelay, 'zweite Spur ohne Send');
+});
+
+test('Send-Pegel folgt track.sends, Mute wirkt über den Fader', async () => {
+  const { engine, ctx, a } = await setup();
+  const chain = engine.chains.get(a.id);
+  a.sends.delay = 0.7;
+  a.sends.reverb = 0.05;
+  ctx.advance(0.02);
+  engine.tick();
+  near(chain.sendDelay.gain.value, 0.7, 1e-6);
+  near(chain.sendReverb.gain.value, 0.05, 1e-6);
+
+  a.mute = true;
+  ctx.advance(0.02);
+  engine.tick();
+  eq(chain.gain.gain.value, 0);
+  near(chain.sendDelay.gain.value, 0.7, 1e-6, 'Send bleibt gesetzt (post-fader)');
+});
+
+test('Delay-Zeit folgt Raster und Tempo', async () => {
+  const { engine, ctx, project } = await setup();
+  near(engine.delay.delayTime.value, 0.25, 1e-6, '1/8 bei 120 BPM');
+  project.fx.delayDivision = '1/4';
+  ctx.advance(0.02);
+  engine.tick();
+  near(engine.delay.delayTime.value, 0.5, 1e-6);
+  project.bpm = 90;
+  project.fx.delayDivision = '1/2';
+  ctx.advance(0.02);
+  engine.tick();
+  near(engine.delay.delayTime.value, (2 * 60) / 90, 1e-6);
+});
+
+test('Feedback und Tone werden begrenzt', async () => {
+  const { engine, ctx, project } = await setup();
+  project.fx.delayFeedback = 2;
+  project.fx.delayTone = 99999;
+  ctx.advance(0.02);
+  engine.tick();
+  eq(engine.delayFb.gain.value, 0.85);
+  eq(engine.delayTone.frequency.value, 9000);
+});
+
+test('Impulsantwort wird nur bei Größenänderung neu gebaut', async () => {
+  const { engine, ctx, project } = await setup();
+  const first = engine.convolver.buffer;
+  assert(first && first.numberOfChannels === 2, 'IR fehlt oder ist nicht stereo');
+  ctx.advance(0.02);
+  engine.tick();
+  assert(engine.convolver.buffer === first, 'IR wurde ohne Änderung neu gebaut');
+  project.fx.reverbSize = 5;
+  ctx.advance(0.02);
+  engine.tick();
+  assert(engine.convolver.buffer !== first, 'IR wurde bei Änderung nicht neu gebaut');
+  near(engine.convolver.buffer.duration, 5, 0.05);
+});
+
+test('Rausch-Wellenform nutzt eine Buffer-Quelle statt Oszillator', async () => {
+  const { engine, ctx, a } = await setup();
+  a.patch.osc1.wave = 'noise';
+  const before = ctx.created.bufferSources.length;
+  const voicesBefore = ctx.created.oscillators.length;
+  const v = engine.noteOn(a.id, 60, 0.8);
+  assert(v, 'Stimme fehlt');
+  eq(ctx.created.bufferSources.length, before + 1);
+  eq(ctx.created.oscillators.length, voicesBefore + 1, 'nur osc2 bleibt Oszillator');
+  assert(v.src1.buffer, 'Buffer fehlt');
+  eq(v.src2.type, 'square');
+  ctx.advance(0.05);
+  engine.tick();
+  assert(v.triggered, 'Noise-Stimme wird nicht getriggert');
+});
+
+test('Presets der Bibliothek sind gültig und nutzen erlaubte Wellen', async () => {
+  const { PRESETS, PATCH_ENUMS, PATCH_RANGES } = await import('../js/state.js');
+  const { getIn } = await import('../js/state.js');
+  assert(PRESETS.length >= 8, 'zu wenige Presets');
+  for (const preset of PRESETS) {
+    for (const [path, allowed] of Object.entries(PATCH_ENUMS)) {
+      const v = getIn(preset.patch, path);
+      if (v === undefined) continue;
+      assert(allowed.includes(v), `${preset.name}: ${path}=${v} nicht erlaubt`);
+    }
+    for (const [path, [min, max]] of Object.entries(PATCH_RANGES)) {
+      const v = getIn(preset.patch, path);
+      if (v === undefined) continue;
+      assert(v >= min && v <= max, `${preset.name}: ${path}=${v} außerhalb ${min}…${max}`);
+    }
+    for (const key of Object.keys(preset.patch.matrix || {})) {
+      const [src, dest] = key.split(':');
+      assert(src && dest, `${preset.name}: Matrix-Route ${key} unvollständig`);
+    }
+  }
 });

@@ -15,6 +15,11 @@ import {
   LIMITS,
   PROJECT_VERSION,
   STORAGE_KEY,
+  LEGACY_STORAGE_KEYS,
+  SEND_DEFAULTS,
+  FX_DEFAULTS,
+  DELAY_DIVISIONS,
+  delaySeconds,
   PPQ,
 } from '../js/project.js';
 import { buildPatch } from '../js/state.js';
@@ -79,10 +84,24 @@ test('activeTrackOf fällt auf erste Spur zurück', () => {
   eq(activeTrackOf(project).name, 'Bass');
 });
 
-test('Falsche Version wird abgelehnt', () => {
-  const result = validateProject({ version: 2, tracks: [] });
+test('Unbekannte Version wird abgelehnt', () => {
+  const result = validateProject({ version: 99, tracks: [] });
   assert(!result.ok);
-  assert(result.errors[0].toLowerCase().includes('version 2'), result.errors[0]);
+  assert(result.errors[0].toLowerCase().includes('version 99'), result.errors[0]);
+});
+
+test('Version 1 wird migriert und mit Defaults ergänzt', () => {
+  const raw = serialize(sampleProject());
+  raw.version = 1;
+  delete raw.fx;
+  for (const t of raw.tracks) delete t.sends;
+  const result = deserialize(JSON.stringify(raw));
+  assert(result.ok, result.errors.join(' | '));
+  eq(result.migratedFrom, 1);
+  eq(result.project.version, 2);
+  eq(result.project.fx.delayDivision, '1/8');
+  eq(result.project.tracks[0].sends.delay, SEND_DEFAULTS.delay);
+  assert(result.warnings.some((w) => w.includes('Projektversion 1')), result.warnings.join(' | '));
 });
 
 test('Unbekannte Matrix-Route wird abgelehnt', () => {
@@ -104,7 +123,7 @@ test('Matrix-Werte außerhalb −100…100 werden abgelehnt', () => {
 
 test('Patch-Enum und -Bereich werden geprüft', () => {
   const raw = serialize(createProject({ tracks: [createTrack({ name: 'X' })] }));
-  raw.tracks[0].patch.osc1.wave = 'noise';
+  raw.tracks[0].patch.osc1.wave = 'saegewerk';
   raw.tracks[0].patch.filter.cutoff = 999999;
   const result = validateProject(raw);
   assert(!result.ok);
@@ -195,4 +214,72 @@ test('buildPatch ergänzt fehlende Felder', () => {
   eq(p.ampEnv.a, 0.01);
   eq(Object.keys(p.matrix).length, 6);
   assert(!('master' in p), 'master gehört ins Projekt, nicht in den Patch');
+});
+
+test('Sends und FX überleben den Roundtrip', () => {
+  const project = sampleProject();
+  project.tracks[0].sends = { delay: 0.65, reverb: 0.1 };
+  project.fx = { ...FX_DEFAULTS, delayDivision: '3/8', delayFeedback: 0.5, reverbSize: 4.5 };
+  const back = deserialize(JSON.stringify(serialize(project)));
+  assert(back.ok, back.errors.join(' | '));
+  eq(back.project.tracks[0].sends, { delay: 0.65, reverb: 0.1 });
+  eq(back.project.fx.delayDivision, '3/8');
+  eq(back.project.fx.delayFeedback, 0.5);
+  eq(back.project.fx.reverbSize, 4.5);
+  eq(back.project.tracks[1].sends, SEND_DEFAULTS);
+});
+
+test('Sends außerhalb 0…1 und unbekannte FX-Werte werden abgelehnt', () => {
+  const raw = serialize(sampleProject());
+  raw.tracks[0].sends.delay = 1.4;
+  raw.fx.delayDivision = '1/3';
+  raw.fx.reverbSize = 99;
+  const result = validateProject(raw);
+  assert(!result.ok);
+  const all = result.errors.join(' | ');
+  assert(all.includes('sends.delay'), all);
+  assert(all.includes('delayDivision'), all);
+  assert(all.includes('reverbSize'), all);
+});
+
+test('Unbekannte Sends und FX-Felder warnen, ohne abzulehnen', () => {
+  const raw = serialize(sampleProject());
+  raw.tracks[0].sends.chorus = 0.5;
+  raw.fx.phaser = 1;
+  const result = validateProject(raw);
+  assert(result.ok, result.errors.join(' | '));
+  const warnings = result.warnings.join(' | ');
+  assert(warnings.includes('sends.chorus'), warnings);
+  assert(warnings.includes('fx.phaser'), warnings);
+});
+
+test('Alter Autosave-Schlüssel wird gelesen und beim Speichern ersetzt', () => {
+  const project = sampleProject();
+  const old = serialize(project);
+  old.version = 1;
+  delete old.fx;
+  for (const t of old.tracks) delete t.sends;
+  const storage = fakeStorage({ [LEGACY_STORAGE_KEYS[0]]: JSON.stringify(old) });
+
+  const loaded = loadLocal(storage);
+  assert(loaded.ok, loaded.errors.join(' | '));
+  eq(loaded.legacyKey, true);
+  eq(loaded.migratedFrom, 1);
+
+  assert(saveLocal(loaded.project, storage).ok);
+  eq(storage.getItem(LEGACY_STORAGE_KEYS[0]), null);
+  assert(storage.getItem(STORAGE_KEY), 'neuer Schlüssel fehlt');
+});
+
+test('delaySeconds rechnet Raster über das Tempo', () => {
+  const project = createProject({ bpm: 120, tracks: [createTrack({ name: 'X' })] });
+  eq(delaySeconds(project), 0.25);
+  project.fx.delayDivision = '1/4';
+  eq(delaySeconds(project), 0.5);
+  project.fx.delayDivision = '3/8';
+  eq(delaySeconds(project), 0.75);
+  project.bpm = 60;
+  eq(delaySeconds(project), 1.5);
+  project.fx.delayDivision = 'unbekannt';
+  eq(delaySeconds(project), 0.5, 'unbekanntes Raster fällt auf 1/8 zurück');
 });

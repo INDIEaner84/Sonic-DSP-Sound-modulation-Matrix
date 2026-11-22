@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, eq, assert, setFile, near } from './harness.mjs';
 import { FakeAudioContext, stopTimer } from './support/fake-audio.mjs';
+import { STORAGE_KEY, DELAY_DIVISIONS, delaySeconds } from '../js/project.js';
+import { PRESETS } from '../js/state.js';
 
 setFile('ui');
 
@@ -93,7 +95,8 @@ if (!JSDOM) {
   /* ------------------------------------------------------------- Aufbau */
 
   test('Rack wird vollständig aufgebaut', () => {
-    eq(q('.knob').length, 20);
+    eq(q('.knob').length, 24, '20 Rack-Knobs + 4 FX-Knobs');
+    eq(q('#fxKnobs .knob').length, 4);
     eq(q('.mx-cell').length, 48);
     eq(q('.key').length, 24);
     eq(q('.seg').length, 7);
@@ -122,6 +125,32 @@ if (!JSDOM) {
       .find((w) => w.querySelector('.k-label') && w.querySelector('.k-label').textContent === 'CUTOFF')
       .querySelector('.k-value').textContent;
     eq(cutoffText, '420 Hz');
+    eq(doc.getElementById('presetSelect').options.length, PRESETS.length + 1, 'Presets + Custom');
+  });
+
+  test('Send-Regler schreibt in die Spur und ins Autosave', async () => {
+    const row = q('.track-row')[0];
+    const send = row.querySelector('.track-send-input.reverb');
+    assert(send, 'Send-Regler fehlt');
+    eq(Number(send.value), project.tracks[0].sends.reverb);
+    send.value = '0.42';
+    send.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await wait(10);
+    eq(project.tracks[0].sends.reverb, 0.42);
+    await wait(800);
+    const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY));
+    eq(stored.tracks[0].sends.reverb, 0.42);
+  });
+
+  test('FX-Auswahl steuert das Delay-Raster', async () => {
+    const select = doc.getElementById('fxDivision');
+    eq(select.options.length, DELAY_DIVISIONS.length);
+    eq(select.value, project.fx.delayDivision);
+    select.value = '1/4';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await wait(10);
+    eq(project.fx.delayDivision, '1/4');
+    eq(delaySeconds(project), 0.5, '1/4 bei 120 BPM');
   });
 
   test('Neue Spur anlegen und auswählen', async () => {
@@ -215,10 +244,12 @@ if (!JSDOM) {
     doc.getElementById('projectName').value = 'Mein Song';
     doc.getElementById('projectName').dispatchEvent(new window.Event('change', { bubbles: true }));
     await wait(850);
-    const raw = window.localStorage.getItem('sonicdsp.project.v1');
+    const raw = window.localStorage.getItem(STORAGE_KEY);
     assert(raw, 'kein Autosave-Eintrag');
     const parsed = JSON.parse(raw);
-    eq(parsed.version, 1);
+    eq(parsed.version, 2);
+    eq(parsed.fx.delayDivision, project.fx.delayDivision);
+    eq(parsed.tracks[0].sends.reverb, 0.42);
     eq(parsed.name, 'Mein Song');
     eq(parsed.tracks.length, 2);
   });

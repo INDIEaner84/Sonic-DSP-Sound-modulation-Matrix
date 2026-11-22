@@ -31,6 +31,7 @@ export const WAVES = [
   { v: 'square', label: 'SQR' },
   { v: 'triangle', label: 'TRI' },
   { v: 'sine', label: 'SIN' },
+  { v: 'noise', label: 'NOISE' },
 ];
 
 export const LFO_SHAPES = [
@@ -225,6 +226,62 @@ export const PRESETS = [
         'lfo2:pitch1': 8,
         'lfo2:pan': 44,
         'mw:reso': 30,
+      },
+    },
+  },
+  {
+    name: 'Sub Bass',
+    patch: {
+      osc1: { wave: 'sine', octave: -2, detune: 0, level: 0.72 },
+      osc2: { wave: 'triangle', octave: -1, detune: 3, level: 0.22 },
+      filter: { type: 'lowpass', cutoff: 320, reso: 1.6 },
+      ampEnv: { a: 0.004, d: 0.22, s: 0.85, r: 0.12 },
+      modEnv: { a: 0.01, d: 0.18, s: 0.25, r: 0.2 },
+      lfo1: { shape: 'sine', rate: 0.6 },
+      lfo2: { shape: 'tri', rate: 0.11 },
+      glide: 0.03,
+      matrix: {
+        'env2:cutoff': 26,
+        'vel:level1': 14,
+        'key:cutoff': 8,
+      },
+    },
+  },
+  {
+    name: 'Noise Hat',
+    patch: {
+      osc1: { wave: 'noise', octave: 0, detune: 0, level: 0.5 },
+      osc2: { wave: 'noise', octave: 1, detune: 0, level: 0.28 },
+      filter: { type: 'highpass', cutoff: 6800, reso: 1.2 },
+      ampEnv: { a: 0.001, d: 0.055, s: 0, r: 0.05 },
+      modEnv: { a: 0.001, d: 0.04, s: 0, r: 0.04 },
+      lfo1: { shape: 'random', rate: 12 },
+      lfo2: { shape: 'sine', rate: 0.2 },
+      glide: 0,
+      matrix: {
+        'vel:cutoff': 30,
+        'env2:cutoff': 20,
+        'lfo2:pan': 40,
+      },
+    },
+  },
+  {
+    name: 'Glass Bell',
+    patch: {
+      osc1: { wave: 'sine', octave: 1, detune: 0, level: 0.4 },
+      osc2: { wave: 'sine', octave: 2, detune: 7, level: 0.22 },
+      filter: { type: 'bandpass', cutoff: 2600, reso: 5.5 },
+      ampEnv: { a: 0.003, d: 1.1, s: 0.06, r: 1.2 },
+      modEnv: { a: 0.002, d: 0.5, s: 0, r: 0.4 },
+      lfo1: { shape: 'sine', rate: 6.2 },
+      lfo2: { shape: 'tri', rate: 0.16 },
+      glide: 0,
+      matrix: {
+        'env2:cutoff': 54,
+        'vel:cutoff': 26,
+        'key:cutoff': 30,
+        'lfo1:pitch1': 2,
+        'lfo2:pan': 34,
       },
     },
   },

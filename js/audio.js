@@ -8,8 +8,8 @@
  * exakter Startzeit (`when`) geplant werden – das nutzt der Sequencer.
  */
 
-import { SOURCES, DESTS, clamp } from './state.js';
-import { trackAudible } from './project.js';
+import { SOURCES, DESTS, clamp, mulberry32 } from './state.js';
+import { trackAudible, delaySeconds, FX_DEFAULTS } from './project.js';
 
 const TWO_PI = Math.PI * 2;
 export const midiToHz = (n) => 440 * Math.pow(2, (n - 69) / 12);
@@ -119,6 +119,25 @@ class LFO {
   }
 }
 
+/* ---------------------------------------------------------------- Quellen */
+
+/**
+ * Erzeugt eine Tonquelle: normaler Oszillator oder – für `'noise'` – einen
+ * geloopten Rausch-Buffer (Percussion/Hihat ohne Sample-Assets).
+ * Rauschquellen haben kein `frequency`-AudioParam; Aufrufer prüfen das.
+ */
+function createSource(ctx, wave, engine) {
+  if (wave === 'noise') {
+    const src = ctx.createBufferSource();
+    src.buffer = engine.noiseBuffer();
+    src.loop = true;
+    return src;
+  }
+  const osc = ctx.createOscillator();
+  osc.type = wave;
+  return osc;
+}
+
 /* ------------------------------------------------------------------- Voice */
 
 class Voice {
@@ -149,10 +168,8 @@ class Voice {
     this.ampEnv = new ADSR(s.ampEnv);
     this.modEnv = new ADSR(s.modEnv);
 
-    this.osc1 = ctx.createOscillator();
-    this.osc1.type = s.osc1.wave;
-    this.osc2 = ctx.createOscillator();
-    this.osc2.type = s.osc2.wave;
+    this.src1 = createSource(ctx, s.osc1.wave, engine);
+    this.src2 = createSource(ctx, s.osc2.wave, engine);
 
     this.g1 = ctx.createGain();
     this.g1.gain.value = 0;
@@ -170,8 +187,8 @@ class Voice {
     this.panner = ctx.createStereoPanner();
     this.panner.pan.value = 0;
 
-    this.osc1.connect(this.g1);
-    this.osc2.connect(this.g2);
+    this.src1.connect(this.g1);
+    this.src2.connect(this.g2);
     this.g1.connect(this.filter);
     this.g2.connect(this.filter);
     this.filter.connect(this.vca);
@@ -179,16 +196,20 @@ class Voice {
     this.panner.connect(chain.input);
 
     const t0 = this.startAt;
-    this.osc1.frequency.setValueAtTime(midiToHz(note + s.osc1.octave * 12 + s.osc1.detune / 100), t0);
-    this.osc2.frequency.setValueAtTime(midiToHz(note + s.osc2.octave * 12 + s.osc2.detune / 100), t0);
+    if (this.src1.frequency) {
+      this.src1.frequency.setValueAtTime(midiToHz(note + s.osc1.octave * 12 + s.osc1.detune / 100), t0);
+    }
+    if (this.src2.frequency) {
+      this.src2.frequency.setValueAtTime(midiToHz(note + s.osc2.octave * 12 + s.osc2.detune / 100), t0);
+    }
     this.filter.frequency.setValueAtTime(s.filter.cutoff, t0);
     this.filter.Q.setValueAtTime(s.filter.reso, t0);
     this.vca.gain.setValueAtTime(0, t0);
     this.g1.gain.setValueAtTime(0, t0);
     this.g2.gain.setValueAtTime(0, t0);
 
-    this.osc1.start(t0);
-    this.osc2.start(t0);
+    this.src1.start(t0);
+    this.src2.start(t0);
   }
 
   release(at) {
@@ -261,8 +282,8 @@ class Voice {
 
     const f1 = midiToHz(this.pitch + sums.pitch1 * 12 + s.osc1.octave * 12 + s.osc1.detune / 100);
     const f2 = midiToHz(this.pitch + sums.pitch2 * 12 + s.osc2.octave * 12 + s.osc2.detune / 100);
-    this.osc1.frequency.setTargetAtTime(f1, now, 0.006);
-    this.osc2.frequency.setTargetAtTime(f2, now, 0.006);
+    if (this.src1.frequency) this.src1.frequency.setTargetAtTime(f1, now, 0.006);
+    if (this.src2.frequency) this.src2.frequency.setTargetAtTime(f2, now, 0.006);
 
     const l1 = clamp(s.osc1.level * (1 + sums.level1), 0, 1.6) * 0.5;
     const l2 = clamp(s.osc2.level * (1 + sums.level2), 0, 1.6) * 0.5;
@@ -284,13 +305,13 @@ class Voice {
     const ctx = this.engine.ctx;
     const t = ctx.currentTime;
     try {
-      this.osc1.stop(t + 0.02);
-      this.osc2.stop(t + 0.02);
+      this.src1.stop(t + 0.02);
+      this.src2.stop(t + 0.02);
     } catch (e) {
       /* bereits gestoppt */
     }
     setTimeout(() => {
-      [this.osc1, this.osc2, this.g1, this.g2, this.filter, this.vca, this.panner].forEach((n) => {
+      [this.src1, this.src2, this.g1, this.g2, this.filter, this.vca, this.panner].forEach((n) => {
         try {
           n.disconnect();
         } catch (e) {
@@ -355,11 +376,13 @@ export class Engine {
 
       this.bus.connect(this.master);
       this.metroGain.connect(this.master);
+      this._initFx(ctx);
       this.master.connect(this.comp);
       this.comp.connect(this.analyser);
       this.analyser.connect(ctx.destination);
 
       this.syncTracks();
+      this._applyFxSettings(ctx.currentTime);
       if (!this._timer) this._timer = setInterval(() => this.tick(), 15);
       if (this.onStateChange) this.onStateChange(this.ctx.state);
     }
@@ -379,9 +402,108 @@ export class Engine {
     if (this.onStateChange) this.onStateChange(this.ctx ? this.ctx.state : 'closed');
   }
 
+  /**
+   * Aux-Busse für die Sends: Delay (Rückkopplung + Tone) und Reverb
+   * (prozedural erzeugte Impulsantwort, kein Sample-Asset).
+   */
+  _initFx(ctx) {
+    this.delayIn = ctx.createGain();
+    this.delay = ctx.createDelay(2);
+    this.delayTone = ctx.createBiquadFilter();
+    this.delayTone.type = 'lowpass';
+    this.delayFb = ctx.createGain();
+    this.delayOut = ctx.createGain();
+    this.delayOut.gain.value = 0.5;
+
+    this.delayIn.connect(this.delay);
+    this.delay.connect(this.delayTone);
+    this.delayTone.connect(this.delayOut);
+    this.delayTone.connect(this.delayFb);
+    this.delayFb.connect(this.delay);
+    this.delayOut.connect(this.master);
+
+    this.reverbIn = ctx.createGain();
+    this.convolver = ctx.createConvolver();
+    this.reverbTone = ctx.createBiquadFilter();
+    this.reverbTone.type = 'lowpass';
+    this.reverbOut = ctx.createGain();
+    this.reverbOut.gain.value = 0.55;
+
+    this.reverbIn.connect(this.convolver);
+    this.convolver.connect(this.reverbTone);
+    this.reverbTone.connect(this.reverbOut);
+    this.reverbOut.connect(this.master);
+
+    this._reverbSize = 0;
+    this._noise = null;
+  }
+
+  /** Deterministischer Rausch-Buffer (2 s), einmal pro Kontext erzeugt. */
+  noiseBuffer() {
+    const ctx = this.ctx;
+    if (this._noise && this._noise.sampleRate === ctx.sampleRate) return this._noise;
+    const rate = ctx.sampleRate || 44100;
+    const length = Math.floor(rate * 2);
+    const buffer = ctx.createBuffer(1, length, rate);
+    const data = buffer.getChannelData(0);
+    const rnd = mulberry32(0x5eed5eed);
+    for (let i = 0; i < length; i++) data[i] = rnd() * 2 - 1;
+    this._noise = buffer;
+    return buffer;
+  }
+
+  /**
+   * Impulsantwort aus abklingendem Rauschen. Energie wird normalisiert, damit
+   * die Reverb-Lautstärke unabhängig von der Größe vergleichbar bleibt.
+   */
+  _buildImpulse(seconds) {
+    const ctx = this.ctx;
+    const rate = ctx.sampleRate || 44100;
+    const length = Math.max(64, Math.floor(rate * seconds));
+    const buffer = ctx.createBuffer(2, length, rate);
+    const rnd = mulberry32(0x9e3779b9);
+    const decay = 3.2;
+    let energy = 0;
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buffer.getChannelData(ch);
+      for (let i = 0; i < length; i++) {
+        const t = i / length;
+        const env = Math.exp(-decay * t) * (1 - t);
+        const v = (rnd() * 2 - 1) * env;
+        data[i] = v;
+        energy += v * v;
+      }
+    }
+    const rms = Math.sqrt(energy / (length * 2)) || 1;
+    const scale = 0.16 / rms;
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buffer.getChannelData(ch);
+      for (let i = 0; i < length; i++) data[i] *= scale;
+    }
+    return buffer;
+  }
+
+  /** FX-Werte aus dem Projekt in die Busse schreiben (Delay-Zeit, Feedback, IR). */
+  _applyFxSettings(now) {
+    if (!this.ctx || !this.project || !this.delay) return;
+    const fx = { ...FX_DEFAULTS, ...(this.project.fx || {}) };
+    const time = delaySeconds({ bpm: this.project.bpm, fx });
+    this.delay.delayTime.setTargetAtTime(clamp(time, 0.01, 1.9), now, 0.05);
+    this.delayFb.gain.setTargetAtTime(clamp(fx.delayFeedback, 0, 0.85), now, 0.05);
+    this.delayTone.frequency.setTargetAtTime(clamp(fx.delayTone, 300, 9000), now, 0.05);
+    this.reverbTone.frequency.setTargetAtTime(1200 + (1 - clamp(fx.reverbDamp, 0, 1)) * 10800, now, 0.05);
+    if (fx.reverbSize !== this._reverbSize) {
+      this.convolver.buffer = this._buildImpulse(fx.reverbSize);
+      this._reverbSize = fx.reverbSize;
+    }
+  }
+
   setProject(project) {
     this.project = project;
-    if (this.ctx) this.syncTracks();
+    if (this.ctx) {
+      this.syncTracks();
+      this._applyFxSettings(this.ctx.currentTime);
+    }
   }
 
   /** Legt für neue Spuren Audioketten an und entfernt gelöschte. */
@@ -395,6 +517,8 @@ export class Engine {
           chain.input.disconnect();
           chain.pan.disconnect();
           chain.gain.disconnect();
+          chain.sendDelay.disconnect();
+          chain.sendReverb.disconnect();
         } catch (e) {
           /* ignore */
         }
@@ -408,10 +532,22 @@ export class Engine {
       const pan = this.ctx.createStereoPanner();
       const gain = this.ctx.createGain();
       gain.gain.value = trackAudible(track, this.project.tracks) ? track.gain : 0;
+
+      /* Sends hinter dem Fader: Mute/Solo wirkt damit auch auf die Effekte. */
+      const sendDelay = this.ctx.createGain();
+      const sendReverb = this.ctx.createGain();
+      sendDelay.gain.value = clamp((track.sends && track.sends.delay) || 0, 0, 1);
+      sendReverb.gain.value = clamp((track.sends && track.sends.reverb) || 0, 0, 1);
+
       input.connect(pan);
       pan.connect(gain);
       gain.connect(this.bus);
-      this.chains.set(track.id, { track, input, pan, gain });
+      gain.connect(sendDelay);
+      gain.connect(sendReverb);
+      sendDelay.connect(this.delayIn);
+      sendReverb.connect(this.reverbIn);
+
+      this.chains.set(track.id, { track, input, pan, gain, sendDelay, sendReverb });
     }
   }
 
@@ -454,8 +590,12 @@ export class Engine {
     for (const chain of this.chains.values()) {
       const audible = trackAudible(chain.track, this.project.tracks);
       chain.gain.gain.setTargetAtTime(audible ? clamp(chain.track.gain, 0, 1.5) : 0, now, 0.02);
+      const sends = chain.track.sends || {};
+      chain.sendDelay.gain.setTargetAtTime(clamp(sends.delay || 0, 0, 1), now, 0.03);
+      chain.sendReverb.gain.setTargetAtTime(clamp(sends.reverb || 0, 0, 1), now, 0.03);
     }
 
+    this._applyFxSettings(now);
     this.master.gain.setTargetAtTime(this.project.master, now, 0.03);
   }
 
@@ -528,8 +668,8 @@ export class Engine {
     for (const v of this.voices) {
       if (trackId && v.track.id !== trackId) continue;
       const s = v.track.patch;
-      v.osc1.type = s.osc1.wave;
-      v.osc2.type = s.osc2.wave;
+      if (v.src1.type) v.src1.type = s.osc1.wave;
+      if (v.src2.type) v.src2.type = s.osc2.wave;
       v.filter.type = s.filter.type;
     }
   }

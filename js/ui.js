@@ -1075,7 +1075,7 @@ export class ClipStrip {
  * Die Liste wird bei jeder Änderung neu aufgebaut – bei max. 8 Spuren günstig
  * und ohne inkrementelle Zustandssynchronisation.
  */
-export function createTrackList(root, { getTracks, getActiveId, onSelect, onMute, onSolo, onGain, onRename, onDelete }) {
+export function createTrackList(root, { getTracks, getActiveId, onSelect, onMute, onSolo, onGain, onSend, onRename, onDelete }) {
   const list = document.createElement('div');
   list.className = 'tracks';
   root.appendChild(list);
@@ -1183,7 +1183,31 @@ export function createTrackList(root, { getTracks, getActiveId, onSelect, onMute
         }, 2500);
       });
 
-      row.append(idx, name, patchName, notes, mute, solo, gainWrap, del);
+      const sends = document.createElement('div');
+      sends.className = 'track-sends';
+      [
+        ['delay', 'DLY', 'Delay-Anteil'],
+        ['reverb', 'REV', 'Reverb-Anteil'],
+      ].forEach(([kind, tagText, title]) => {
+        const wrap = document.createElement('label');
+        wrap.className = 'track-send';
+        const tag = document.createElement('span');
+        tag.textContent = tagText;
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = '0';
+        input.max = '1';
+        input.step = '0.01';
+        input.className = `track-send-input ${kind}`;
+        input.value = String((track.sends && track.sends[kind]) || 0);
+        input.title = title;
+        input.setAttribute('aria-label', `${title} ${track.name}`);
+        input.addEventListener('input', () => onSend(track.id, kind, Number(input.value)));
+        wrap.append(tag, input);
+        sends.appendChild(wrap);
+      });
+
+      row.append(idx, name, patchName, notes, mute, solo, gainWrap, del, sends);
       list.appendChild(row);
     });
   }

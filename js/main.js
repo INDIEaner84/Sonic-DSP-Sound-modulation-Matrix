@@ -33,6 +33,8 @@ import {
   safeFilename,
   readTextFile,
   readBinaryFile,
+  FX_DEFAULTS,
+  DELAY_DIVISIONS,
 } from './project.js';
 import { encodeProject, decodeToProject, defaultImportPatches } from './midi-io.js';
 import {
@@ -420,6 +422,12 @@ const trackList = createTrackList(document.getElementById('tracks'), {
     t.gain = clamp(value, 0, LIMITS.maxGain);
     scheduleSave();
   },
+  onSend: (id, kind, value) => {
+    const t = project.tracks.find((x) => x.id === id);
+    if (!t || !(kind in t.sends)) return;
+    t.sends[kind] = clamp(value, 0, LIMITS.maxSend);
+    scheduleSave();
+  },
   onRename: (id, name) => {
     const t = project.tracks.find((x) => x.id === id);
     if (!t) return;
@@ -429,6 +437,63 @@ const trackList = createTrackList(document.getElementById('tracks'), {
   },
   onDelete: (id) => deleteTrack(id),
 });
+
+/* --------------------------------------------------------------------- FX */
+
+const fxKnobs = [];
+
+function addFxKnob(key, opts) {
+  const parent = document.getElementById('fxKnobs');
+  if (!parent) return null;
+  const knob = createKnob(parent, {
+    value: project.fx[key],
+    def: FX_DEFAULTS[key],
+    ...opts,
+    onChange: (v) => {
+      project.fx[key] = v;
+      scheduleSave();
+    },
+  });
+  fxKnobs.push({ key, knob });
+  return knob;
+}
+
+addFxKnob('delayFeedback', {
+  min: 0,
+  max: LIMITS.maxDelayFeedback,
+  label: 'FEEDBACK',
+  format: fmt.pct,
+});
+addFxKnob('delayTone', {
+  min: LIMITS.minDelayTone,
+  max: LIMITS.maxDelayTone,
+  curve: 'log',
+  label: 'TONE',
+  format: fmt.hz,
+});
+addFxKnob('reverbSize', {
+  min: LIMITS.minReverbSize,
+  max: LIMITS.maxReverbSize,
+  label: 'REVERB',
+  format: fmt.sec,
+});
+addFxKnob('reverbDamp', { min: 0, max: 1, label: 'DAMP', format: fmt.pct });
+
+const fxDivision = document.getElementById('fxDivision');
+if (fxDivision) {
+  for (const division of DELAY_DIVISIONS) {
+    const option = document.createElement('option');
+    option.value = division;
+    option.textContent = division;
+    fxDivision.appendChild(option);
+  }
+  fxDivision.value = project.fx.delayDivision;
+  fxDivision.addEventListener('change', () => {
+    if (!DELAY_DIVISIONS.includes(fxDivision.value)) return;
+    project.fx.delayDivision = fxDivision.value;
+    scheduleSave();
+  });
+}
 
 function addTrack() {
   if (project.tracks.length >= LIMITS.maxTracks) {
@@ -785,6 +850,8 @@ function refreshUI() {
   segs.forEach(({ path, seg }) => seg.set(getIn(getPatch(), path)));
   masterKnob.set(project.master, true);
   wheel.set(project.modWheel);
+  fxKnobs.forEach(({ key, knob }) => knob.set(project.fx[key], true));
+  if (fxDivision) fxDivision.value = project.fx.delayDivision;
   matrix.refresh();
   syncPresetSelect();
   updateOctaveLabel();

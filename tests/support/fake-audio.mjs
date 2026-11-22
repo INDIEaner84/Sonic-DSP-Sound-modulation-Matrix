@@ -81,6 +81,52 @@ export class FakeBiquad extends BaseNode {
   }
 }
 
+export class FakeBuffer {
+  constructor(channels, length, sampleRate) {
+    this.numberOfChannels = channels;
+    this.length = length;
+    this.sampleRate = sampleRate;
+    this.duration = length / sampleRate;
+    this._data = Array.from({ length: channels }, () => new Float32Array(length));
+  }
+  getChannelData(ch) {
+    return this._data[ch];
+  }
+}
+
+export class FakeBufferSource extends BaseNode {
+  constructor(ctx) {
+    super(ctx);
+    this.buffer = null;
+    this.loop = false;
+    this.playbackRate = new Param(1);
+    this.startedAt = null;
+    this.stoppedAt = null;
+  }
+  start(t = 0) {
+    this.startedAt = t;
+  }
+  stop(t = 0) {
+    this.stoppedAt = t;
+  }
+}
+
+export class FakeDelay extends BaseNode {
+  constructor(ctx, maxDelay = 1) {
+    super(ctx);
+    this.maxDelayTime = maxDelay;
+    this.delayTime = new Param(0);
+  }
+}
+
+export class FakeConvolver extends BaseNode {
+  constructor(ctx) {
+    super(ctx);
+    this.buffer = null;
+    this.normalize = true;
+  }
+}
+
 export class FakePanner extends BaseNode {
   constructor(ctx) {
     super(ctx);
@@ -117,7 +163,16 @@ export class FakeAudioContext {
     this.state = 'running';
     this.sampleRate = 48000;
     this.destination = new BaseNode(this);
-    this.created = { oscillators: [], gains: [], filters: [], panners: [], analysers: 0 };
+    this.created = {
+      oscillators: [],
+      gains: [],
+      filters: [],
+      panners: [],
+      delays: [],
+      convolvers: [],
+      bufferSources: [],
+      analysers: 0,
+    };
   }
   createGain() {
     const g = new FakeGain(this);
@@ -138,6 +193,24 @@ export class FakeAudioContext {
     const p = new FakePanner(this);
     this.created.panners.push(p);
     return p;
+  }
+  createDelay(maxDelay = 1) {
+    const d = new FakeDelay(this, maxDelay);
+    this.created.delays.push(d);
+    return d;
+  }
+  createConvolver() {
+    const c = new FakeConvolver(this);
+    this.created.convolvers.push(c);
+    return c;
+  }
+  createBuffer(channels, length, sampleRate = this.sampleRate) {
+    return new FakeBuffer(channels, length, sampleRate);
+  }
+  createBufferSource() {
+    const b = new FakeBufferSource(this);
+    this.created.bufferSources.push(b);
+    return b;
   }
   createDynamicsCompressor() {
     return new FakeCompressor(this);
