@@ -1,0 +1,10 @@
+{
+  "name": "sonic-dsp-modulation-matrix",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Polyphoner Web-Audio-Synthesizer mit frei verschaltbarer Modulationsmatrix",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  }
+}
