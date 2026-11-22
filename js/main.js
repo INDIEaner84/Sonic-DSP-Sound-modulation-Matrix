@@ -11,6 +11,7 @@ import {
   SOURCES,
   DESTS,
   WAVES,
+  DRUM_KIT,
   LFO_SHAPES,
   FILTER_TYPES,
   clamp,
@@ -354,7 +355,12 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   if (e.repeat || pressedKeys.has(k)) return;
 
-  const note = baseNote + KEYMAP[k];
+  /* Bei einer Drum-Spur spielt die Rechner-Tastatur die Pads statt Tonhöhen. */
+  const track = activeTrack();
+  const note =
+    track && track.instrument === 'drums'
+      ? DRUM_KIT[KEYMAP[k] % DRUM_KIT.length].note
+      : baseNote + KEYMAP[k];
   pressedKeys.set(k, note);
   keyboard.pressExternal(note);
   ensureAudio().then(() => clock.noteOn(note, 0.82));

@@ -358,6 +358,29 @@ if (!JSDOM) {
     await wait(10);
   });
 
+  test('Rechner-Tastatur spielt bei Drum-Spur die Pads', async () => {
+    eq(project.tracks[0].instrument, 'drums');
+    doc.getElementById('recBtn').click();
+    await wait(20);
+    if (clock._timer) {
+      clearInterval(clock._timer);
+      clock._timer = null;
+    }
+    engine.ctx.currentTime = clock.loopStart + 0.01;
+    const before = project.tracks[0].clip.count;
+    doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    await wait(30);
+    eq(project.tracks[0].clip.count, before + 1, 'Taste A wurde nicht aufgenommen');
+    const events = project.tracks[0].clip.toTakes().flat();
+    const last = events[events.length - 1];
+    eq(last.note, 36, 'Taste A entspricht der Kick');
+    doc.dispatchEvent(new window.KeyboardEvent('keyup', { key: 'a', bubbles: true }));
+    clock.stop();
+    await wait(10);
+    clock.clearClip();
+    await wait(10);
+  });
+
   test('MIDI-Panel zeigt Zustand, Learn bleibt ohne Verbindung gesperrt', async () => {
     eq(doc.getElementById('midiStatus').textContent.length > 0, true);
     assert(doc.getElementById('midiLearnBtn').disabled, 'Learn muss ohne Verbindung gesperrt sein');

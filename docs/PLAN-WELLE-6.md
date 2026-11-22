@@ -49,8 +49,10 @@ programmieren, sowie Drumpads."
 
 | Paket | Ergebnis |
 | --- | --- |
-| P6.1–P6.5 | umgesetzt; `npm test` 116/116, `npm run test:ui` 138/138 |
+| P6.1–P6.5 | umgesetzt; `npm test` 117/117, `npm run test:ui` 139/139 |
 
 Abweichungen vom Plan: Das MIDI-Panel bekam zusätzlich einen Monitor (zeigt die letzte
-Roh-Nachricht) und UI-Aktualisierungen aus CC-Strömen werden per `requestAnimationFrame`
-gebündelt. Die Pads sind projektweit eine Kit-Belegung (kein Kit-Wechsel pro Spur).
+Roh-Nachricht), UI-Aktualisierungen aus CC-Strömen werden per `requestAnimationFrame`
+gebündelt, und bei einer Drum-Spur spielt die Rechner-Tastatur die Pads statt Tonhöhen
+(sonst wären die Tasten auf einer Drum-Spur nur ein Hat-Fallback). Die Pads sind
+projektweit eine Kit-Belegung (kein Kit-Wechsel pro Spur).

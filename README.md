@@ -115,8 +115,9 @@ Init Lead, Wobble Bass, Pluck Lead, Drift Pad, Res Sweep FX, Sub Bass, Noise Hat
 | **PIANO** | fünf verstimmte Partiale + Hammer-Noise, Ausklingen je Lage | Tastatur/Pads/MIDI; velocity steuert Helligkeit und Lautstärke |
 | **DRUMS** | Kick, Snare, Clap, Hat zu/open, Tom, Rim, Crash (synthetisch) | die acht Pads im Panel „Pads“ oder Noten 36–49 |
 
-Pads lassen sich mit der Maus, der Rechner-Tastatur (Noten der aktiven Oktave) und über
-MIDI spielen; im Aufnahme-Modus landen Pad-Schläge als Noten im Loop der aktiven Spur.
+Pads lassen sich mit der Maus, der Rechner-Tastatur und über MIDI spielen; im Aufnahme-Modus
+landen Pad-Schläge als Noten im Loop der aktiven Spur. Ist die aktive Spur eine Drum-Spur,
+spielt die Rechner-Tastatur (`A S D F …`) direkt die Pads statt Tonhöhen.
 
 ### MIDI-Controller (z. B. Nektar Impact)
 
@@ -194,8 +195,8 @@ die Note-Logik — dadurch bleiben geplante Releases konsistent.
 ## Tests
 
 ```bash
-npm test           # 116 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
-npm run test:ui    # zusätzlich 22 jsdom-Integrationstests (138 gesamt)
+npm test           # 117 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
+npm run test:ui    # zusätzlich 22 jsdom-Integrationstests (139 gesamt)
 ```
 
 Die Tests laufen ohne Framework (`node:test`-frei, eigener Mini-Runner in
