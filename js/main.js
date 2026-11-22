@@ -1,5 +1,5 @@
 /* Sonic DSP — App-Verdrahtung
- * Verbindet Patch-State, Audio-Engine und UI-Bausteine.
+ * Verbindet Patch-State, Audio-Engine, Clock/Loop-Recorder und UI-Bausteine.
  */
 
 import {
@@ -17,19 +17,26 @@ import {
   mulberry32,
 } from './state.js';
 import { Engine } from './audio.js';
+import { Clock } from './clock.js';
+import { Clip } from './clip.js';
 import {
   createKnob,
   createSeg,
   createWheel,
   createMatrix,
   createKeyboard,
+  createSlider,
   Scope,
   LfoPreview,
+  ClipStrip,
   fmt,
   noteName,
 } from './ui.js';
 
 const engine = new Engine(state);
+const clip = new Clip();
+const clock = new Clock(engine, clip);
+
 const knobs = [];
 const segs = [];
 
@@ -153,7 +160,7 @@ const masterKnob = addKnob('masterKnobSlot', 'master', {
   format: fmt.pct,
   def: 0.72,
   after: (v) => {
-    if (engine.master) engine.master.gain.setTargetAtTime(v, engine.ctx.currentTime, 0.02);
+    if (engine.master && engine.ctx) engine.master.gain.setTargetAtTime(v, engine.ctx.currentTime, 0.02);
   },
 });
 if (masterKnob) masterKnob.el.classList.add('master-knob');
@@ -177,9 +184,9 @@ const keyboard = createKeyboard(keysEl, {
   octaves: 2,
   onNoteOn: async (note, velocity) => {
     await ensureAudio();
-    engine.noteOn(note, velocity);
+    clock.noteOn(note, velocity);
   },
-  onNoteOff: (note) => engine.noteOff(note),
+  onNoteOff: (note) => clock.noteOff(note),
 });
 
 function updateOctaveLabel() {
@@ -225,6 +232,19 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
+  if (e.code === 'Space') {
+    e.preventDefault();
+    togglePlay();
+    return;
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    clock.panic();
+    pressedKeys.clear();
+    keyboard.releaseAll();
+    return;
+  }
+
   const k = e.key.toLowerCase();
   if (k === 'z') {
     shiftOctave(-1);
@@ -241,7 +261,7 @@ document.addEventListener('keydown', (e) => {
   const note = baseNote + KEYMAP[k];
   pressedKeys.set(k, note);
   keyboard.pressExternal(note);
-  ensureAudio().then(() => engine.noteOn(note, 0.82));
+  ensureAudio().then(() => clock.noteOn(note, 0.82));
 });
 
 document.addEventListener('keyup', (e) => {
@@ -250,13 +270,13 @@ document.addEventListener('keyup', (e) => {
   const note = pressedKeys.get(k);
   pressedKeys.delete(k);
   keyboard.releaseExternal(note);
-  engine.noteOff(note);
+  clock.noteOff(note);
 });
 
 window.addEventListener('blur', () => {
   pressedKeys.clear();
   keyboard.releaseAll();
-  engine.allNotesOff();
+  clock.releaseLive();
 });
 
 /* ------------------------------------------------------------------ Scope */
@@ -270,15 +290,121 @@ const scope = new Scope(document.getElementById('scope'), {
 const lfo1Preview = new LfoPreview(document.getElementById('lfo1Scope'), engine, 'lfo1', '#ffb245');
 const lfo2Preview = new LfoPreview(document.getElementById('lfo2Scope'), engine, 'lfo2', '#54d7c7');
 
-let frame = 0;
-function loop() {
-  requestAnimationFrame(loop);
-  scope.draw();
-  lfo1Preview.draw();
-  lfo2Preview.draw();
-  if ((frame++ & 1) === 0) matrix.setActivity(engine.srcSnapshot, engine.lastSums);
+const strip = new ClipStrip(document.getElementById('clipCanvas'), {
+  clock,
+  clip,
+  badgeEl: document.getElementById('clipBadge'),
+});
+
+/* ------------------------------------------------------------------ Transport */
+
+const recBtn = document.getElementById('recBtn');
+const playBtn = document.getElementById('playBtn');
+const recLabel = document.getElementById('recLabel');
+const playLabel = document.getElementById('playLabel');
+const posDisplay = document.getElementById('posDisplay');
+const loopProgress = document.getElementById('loopProgress');
+const takeInfo = document.getElementById('takeInfo');
+const undoBtn = document.getElementById('undoBtn');
+const clearClipBtn = document.getElementById('clearClipBtn');
+const metroBtn = document.getElementById('metroBtn');
+const bpmVal = document.getElementById('bpmVal');
+
+const loopSeg = createSeg(document.getElementById('segLoop'), {
+  options: ['1', '2', '4', '8', '16'].map((v) => ({ v, label: v })),
+  value: String(clock.bars),
+  onChange: (v) => {
+    clock.setBars(Number(v));
+    syncTransportUI();
+  },
+});
+
+const quantSeg = createSeg(document.getElementById('segQuant'), {
+  options: [
+    { v: '0', label: 'OFF' },
+    { v: '240', label: '1/8' },
+    { v: '120', label: '1/16' },
+    { v: '60', label: '1/32' },
+  ],
+  value: String(clock.quantizeStep),
+  onChange: (v) => clock.setQuantize(Number(v)),
+});
+
+createSlider(document.getElementById('swingSlider'), {
+  label: 'SWING',
+  min: 0,
+  max: 0.6,
+  value: clock.swing,
+  format: (v) => Math.round(v * 100) + '%',
+  onChange: (v) => clock.setSwing(v),
+});
+
+function syncTransportUI() {
+  document.body.classList.toggle('is-playing', clock.running);
+  document.body.classList.toggle('is-recording', clock.recording);
+  recBtn.classList.toggle('on', clock.recording);
+  playBtn.classList.toggle('on', clock.running);
+  recLabel.textContent = clock.recording ? 'Rec…' : 'Rec';
+  playLabel.textContent = clock.running ? 'Stop' : 'Play';
+  undoBtn.disabled = clip.takeCount === 0;
+  clearClipBtn.disabled = clip.count === 0;
+  metroBtn.classList.toggle('on', clock.metronome);
+  bpmVal.textContent = String(clock.bpm);
+  takeInfo.textContent = clip.count
+    ? `${clip.count} Noten · ${clip.takeCount} ${clip.takeCount === 1 ? 'Take' : 'Takes'}`
+    : 'leer';
 }
-requestAnimationFrame(loop);
+
+clock.onChange(syncTransportUI);
+
+async function togglePlay() {
+  await ensureAudio();
+  if (!engine.ctx) return;
+  if (clock.running) clock.stop();
+  else clock.start({ countIn: false });
+  syncTransportUI();
+}
+
+async function toggleRec() {
+  await ensureAudio();
+  if (!engine.ctx) return;
+  clock.toggleRecord();
+  syncTransportUI();
+}
+
+playBtn.addEventListener('click', togglePlay);
+recBtn.addEventListener('click', toggleRec);
+
+undoBtn.addEventListener('click', () => {
+  clock.undo();
+  syncTransportUI();
+});
+
+clearClipBtn.addEventListener('click', () => {
+  if (clock.recording) clock.endRecording();
+  clock.clearClip();
+  syncTransportUI();
+});
+
+metroBtn.addEventListener('click', () => {
+  clock.setMetronome(!clock.metronome);
+  syncTransportUI();
+});
+
+function nudgeBpm(delta) {
+  clock.setBpm(clock.bpm + delta);
+  bpmVal.textContent = String(clock.bpm);
+}
+document.getElementById('bpmUp').addEventListener('click', (e) => nudgeBpm(e.shiftKey ? 5 : 1));
+document.getElementById('bpmDown').addEventListener('click', (e) => nudgeBpm(e.shiftKey ? -5 : -1));
+document.querySelector('.bpm').addEventListener(
+  'wheel',
+  (e) => {
+    e.preventDefault();
+    nudgeBpm(e.deltaY > 0 ? -1 : 1);
+  },
+  { passive: false }
+);
 
 /* --------------------------------------------------------------- Audio-Start */
 
@@ -318,7 +444,7 @@ powerBtn.addEventListener('click', async () => {
   if (engine.ctx.state === 'running') {
     await engine.suspend();
     markAudioOn(false);
-    engine.allNotesOff();
+    clock.panic();
   } else {
     await ensureAudio();
   }
@@ -349,7 +475,7 @@ select.addEventListener('change', () => {
   const index = Number(select.value);
   const preset = PRESETS[index];
   if (!preset) return;
-  engine.allNotesOff();
+  clock.panic();
   const prevMaster = state.master;
   const prevWheel = state.modWheel;
   const patch = buildPatch(preset.patch);
@@ -383,21 +509,44 @@ document.getElementById('randBtn').addEventListener('click', () => {
 });
 
 document.getElementById('panicBtn').addEventListener('click', () => {
-  engine.allNotesOff();
+  clock.panic();
   pressedKeys.clear();
   keyboard.releaseAll();
 });
 
+/* ------------------------------------------------------------------ Loop */
+
+let frame = 0;
+function loop() {
+  requestAnimationFrame(loop);
+  scope.draw();
+  lfo1Preview.draw();
+  lfo2Preview.draw();
+  strip.draw();
+  if ((frame++ & 1) === 0) {
+    matrix.setActivity(engine.srcSnapshot, engine.lastSums);
+    const p = clock.position();
+    posDisplay.textContent = p.counting ? '·' + p.countdown : `${p.bar}.${p.beat}.${p.sixteenth}`;
+    loopProgress.style.width = (p.running ? p.phase * 100 : 0).toFixed(1) + '%';
+  }
+}
+requestAnimationFrame(loop);
+
 /* ------------------------------------------------------------------ Start */
 
 refreshUI();
-setTimeout(() => scope.resize(), 60);
+syncTransportUI();
+setTimeout(() => {
+  scope.resize();
+  strip.resize();
+}, 60);
 window.addEventListener('load', () => {
   scope.resize();
   lfo1Preview.resize();
   lfo2Preview.resize();
+  strip.resize();
 });
 
-console.info('%cSONIC DSP', 'color:#ffb245;font-weight:700', '— Modulation Matrix bereit.');
+console.info('%cSONIC DSP', 'color:#ffb245;font-weight:700', '— Modulation Matrix + Loop Recorder bereit.');
 
-export { state, engine };
+export { state, engine, clock, clip };

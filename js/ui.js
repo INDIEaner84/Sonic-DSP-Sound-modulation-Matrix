@@ -833,3 +833,229 @@ export class LfoPreview {
     g.fillText(rate < 10 ? rate.toFixed(2) + ' Hz' : Math.round(rate) + ' Hz', w - 2, 10);
   }
 }
+
+/* ------------------------------------------------------------- Mini-Slider */
+
+export function createSlider(parent, { label = '', min = 0, max = 1, value = 0, format = (v) => String(v), onChange }) {
+  const wrap = document.createElement('div');
+  wrap.className = 'slider-wrap';
+
+  const top = document.createElement('div');
+  top.className = 'slider-top';
+  const lab = document.createElement('span');
+  lab.className = 'slider-label';
+  lab.textContent = label;
+  const val = document.createElement('span');
+  val.className = 'slider-val';
+  top.append(lab, val);
+
+  const slider = document.createElement('div');
+  slider.className = 'slider';
+  slider.tabIndex = 0;
+  slider.setAttribute('role', 'slider');
+  slider.setAttribute('aria-label', label);
+  const fill = document.createElement('div');
+  fill.className = 'slider-fill';
+  const handle = document.createElement('div');
+  handle.className = 'slider-handle';
+  slider.append(fill, handle);
+
+  wrap.append(top, slider);
+  parent.appendChild(wrap);
+
+  let v = clamp(value, min, max);
+
+  function render() {
+    const n = (v - min) / (max - min || 1);
+    fill.style.width = n * 100 + '%';
+    handle.style.left = `calc(${n * 100}% - 5px)`;
+    val.textContent = format(v);
+    slider.setAttribute('aria-valuenow', String(v));
+  }
+
+  function set(nv, fire = true) {
+    v = clamp(nv, min, max);
+    render();
+    if (fire && onChange) onChange(v);
+  }
+
+  function fromClientX(clientX) {
+    const r = slider.getBoundingClientRect();
+    return min + ((clientX - r.left) / (r.width || 1)) * (max - min);
+  }
+
+  slider.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    slider.focus();
+    slider.setPointerCapture(e.pointerId);
+    set(fromClientX(e.clientX));
+    const onMove = (ev) => set(fromClientX(ev.clientX));
+    const onUp = () => {
+      slider.removeEventListener('pointermove', onMove);
+      slider.removeEventListener('pointerup', onUp);
+      slider.removeEventListener('pointercancel', onUp);
+    };
+    slider.addEventListener('pointermove', onMove);
+    slider.addEventListener('pointerup', onUp);
+    slider.addEventListener('pointercancel', onUp);
+  });
+
+  slider.addEventListener('keydown', (e) => {
+    const step = (max - min) / 20;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      set(v + step);
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      set(v - step);
+    }
+  });
+
+  slider.addEventListener('dblclick', () => set(min));
+
+  render();
+  return { el: wrap, set: (nv) => set(nv, false), get value() { return v; } };
+}
+
+/* ------------------------------------------------------------- Loop-Leiste */
+
+const TAKE_COLORS = ['#ffb245', '#54d7c7', '#a98bff', '#7bd88f', '#ff7a9c', '#8ab4ff'];
+
+export class ClipStrip {
+  constructor(canvas, { clock, clip, badgeEl }) {
+    this.canvas = canvas;
+    this.g = canvas.getContext('2d');
+    this.clock = clock;
+    this.clip = clip;
+    this.badgeEl = badgeEl;
+    this._badge = '';
+    this.dpr = 1;
+    this.resize();
+    if (window.ResizeObserver) {
+      this.ro = new ResizeObserver(() => this.resize());
+      this.ro.observe(canvas);
+    }
+  }
+
+  resize() {
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.dpr = dpr;
+    this.w = Math.max(2, Math.round(rect.width));
+    this.h = Math.max(2, Math.round(rect.height));
+    this.canvas.width = Math.round(this.w * dpr);
+    this.canvas.height = Math.round(this.h * dpr);
+    this.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  draw() {
+    const g = this.g;
+    const w = this.w;
+    const h = this.h;
+    const clock = this.clock;
+    const bars = clock.bars;
+
+    g.clearRect(0, 0, w, h);
+
+    /* Hintergrund + Takt-Raster */
+    g.fillStyle = 'rgba(8, 11, 15, 0.72)';
+    g.fillRect(0, 0, w, h);
+
+    for (let b = 0; b <= bars * 4; b++) {
+      const x = Math.round((b / (bars * 4)) * w) + 0.5;
+      const isBar = b % 4 === 0;
+      g.strokeStyle = isBar ? 'rgba(160, 185, 210, 0.22)' : 'rgba(160, 185, 210, 0.08)';
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(x, isBar ? 0 : h * 0.62);
+      g.lineTo(x, h);
+      g.stroke();
+    }
+
+    const events = this.clip.events;
+    const loopTicks = clock.loopTicks;
+
+    if (!events.length) {
+      g.fillStyle = 'rgba(127, 140, 156, 0.5)';
+      g.font = '600 9px ui-monospace, Menlo, monospace';
+      g.textAlign = 'left';
+      g.fillText('REC DRÜCKEN → LOOP AUFNEHMEN', 10, h / 2 + 3);
+    } else {
+      let lo = 127;
+      let hi = 0;
+      for (const ev of events) {
+        lo = Math.min(lo, ev.note);
+        hi = Math.max(hi, ev.note);
+      }
+      if (hi - lo < 12) {
+        const mid = (hi + lo) / 2;
+        lo = Math.round(mid - 6);
+        hi = Math.round(mid + 6);
+      }
+      lo -= 1;
+      hi += 1;
+      const padY = 4;
+      const noteH = Math.max(2, Math.min(6, (h - padY * 2) / (hi - lo)));
+      const takeIndex = new Map();
+      this.clip.takes.forEach((t, i) => takeIndex.set(t.id, i));
+
+      for (const ev of events) {
+        const x = (ev.tick / loopTicks) * w;
+        const nw = Math.max(2.5, (ev.dur / loopTicks) * w - 1);
+        const y = padY + (1 - (ev.note - lo) / (hi - lo)) * (h - padY * 2 - noteH);
+        const idx = takeIndex.get(ev.take) || 0;
+        g.fillStyle = TAKE_COLORS[idx % TAKE_COLORS.length];
+        g.globalAlpha = 0.85;
+        g.fillRect(x, y, Math.min(nw, w - x), noteH);
+      }
+      g.globalAlpha = 1;
+    }
+
+    /* Playhead */
+    const pos = clock.position();
+    if (pos.running) {
+      const x = Math.round(pos.phase * w) + 0.5;
+      g.strokeStyle = pos.counting ? 'rgba(255, 178, 69, 0.5)' : 'rgba(255, 255, 255, 0.85)';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.moveTo(x, 0);
+      g.lineTo(x, h);
+      g.stroke();
+      if (!pos.counting) {
+        g.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        g.beginPath();
+        g.moveTo(x - 3, 0);
+        g.lineTo(x + 3, 0);
+        g.lineTo(x, 4);
+        g.closePath();
+        g.fill();
+      }
+    }
+
+    /* Aufnahme-Rahmen */
+    if (clock.recording) {
+      g.strokeStyle = 'rgba(255, 95, 109, 0.75)';
+      g.lineWidth = 1.5;
+      g.strokeRect(0.75, 0.75, w - 1.5, h - 1.5);
+      g.fillStyle = 'rgba(255, 95, 109, 0.85)';
+      g.beginPath();
+      g.arc(w - 9, 9, 4, 0, Math.PI * 2);
+      g.fill();
+    }
+
+    /* Badge */
+    if (this.badgeEl) {
+      const text = clock.running
+        ? pos.counting
+          ? `COUNT-IN ${pos.countdown} · ${bars} Bars`
+          : `${bars} Bars · ${this.clip.count} Noten · ${this.clip.takeCount} Takes`
+        : `${bars} Bars · ${this.clip.count} Noten${this.clip.takeCount ? ` · ${this.clip.takeCount} Takes` : ' · leer'}`;
+      if (text !== this._badge) {
+        this._badge = text;
+        this.badgeEl.textContent = text;
+      }
+    }
+  }
+}

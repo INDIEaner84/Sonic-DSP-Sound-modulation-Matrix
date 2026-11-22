@@ -255,11 +255,13 @@ GPL/AGPL verlangen, dass dein Quellcode unter derselben Lizenz offen bleibt.
 
 ## 9. Roadmap in vier Etappen
 
-### Etappe 1 — Loop & Aufnahme (keine neue Dependency)
-- Transportleiste: Play/Stop, BPM (60–200), Loop-Länge 1/2/4/8/16 Bars, Metronom
-- Note-Recorder mit Count-in, Overdub, Undo, Quantize (1/16 default) + Swing
-- Loop-Overlay über dem Keyboard, Playhead, Taktzähler
-- `Engine.noteOn(note, vel, when)` um Startzeit erweitern
+### Etappe 1 — Loop & Aufnahme (keine neue Dependency) · **umgesetzt**
+
+- Transportleiste: Play/Stop, BPM (40–240), Loop-Länge 1/2/4/8/16 Bars, Metronom
+- Note-Recorder mit Count-in, Overdub (Takes), Undo, Quantize + Swing
+- Loop-Leiste über dem Keyboard mit Playhead, Taktzähler, Badge
+- `Engine.noteOn(note, vel, when)` plant Startzeiten exakt im Raster
+- Dateien: `js/clock.js`, `js/clip.js`, erweitert in `js/audio.js`, `js/ui.js`, `js/main.js`
 
 ### Etappe 2 — Spuren & Speichern
 - 3–4 Spuren mit eigenem Patch, Mute/Solo, Pegel, Spur-Fokus („welche Spur nehme ich auf")

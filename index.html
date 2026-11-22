@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Sonic DSP — Modulation Matrix</title>
-    <meta name="description" content="Polyphoner Web-Audio-Synthesizer mit frei verschaltbarer Modulationsmatrix." />
+    <meta name="description" content="Polyphoner Web-Audio-Synthesizer mit Modulationsmatrix, Loop-Recorder und Transport." />
     <link rel="stylesheet" href="css/style.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230d1116'/%3E%3Cpath d='M6 20 L11 10 L16 22 L21 8 L26 18' stroke='%23ffb245' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
   </head>
@@ -17,7 +17,7 @@
           </div>
           <div class="brand-text">
             <h1>SONIC <em>DSP</em></h1>
-            <p>Modulation Matrix <span class="sep">/</span> Subtractive Voice</p>
+            <p>Modulation Matrix <span class="sep">/</span> Loop Recorder</p>
           </div>
         </div>
 
@@ -34,6 +34,56 @@
         </div>
       </header>
 
+      <!-- --------------------------------------------------------- Transport -->
+      <section class="transport" id="transport" aria-label="Transport">
+        <div class="tp-left">
+          <button class="btn rec" id="recBtn" type="button" title="Aufnahme starten (mit Count-in)">
+            <span class="rec-dot" aria-hidden="true"></span>
+            <span id="recLabel">Rec</span>
+          </button>
+          <button class="btn play" id="playBtn" type="button" title="Start / Stop">
+            <span class="play-icon" aria-hidden="true"></span>
+            <span id="playLabel">Play</span>
+          </button>
+        </div>
+
+        <div class="tp-group">
+          <span class="tp-label">Loop</span>
+          <div id="segLoop"></div>
+        </div>
+
+        <div class="tp-group">
+          <span class="tp-label">Quantize</span>
+          <div id="segQuant"></div>
+        </div>
+
+        <div class="tp-group tp-swing">
+          <div id="swingSlider"></div>
+        </div>
+
+        <div class="tp-group">
+          <span class="tp-label">Tempo</span>
+          <div class="bpm">
+            <button class="btn step" id="bpmDown" type="button" aria-label="Tempo langsamer">−</button>
+            <span class="bpm-val" id="bpmVal">120</span>
+            <span class="bpm-unit">BPM</span>
+            <button class="btn step" id="bpmUp" type="button" aria-label="Tempo schneller">+</button>
+          </div>
+        </div>
+
+        <div class="tp-group tp-actions">
+          <button class="btn ghost" id="metroBtn" type="button" title="Metronom">Metro</button>
+          <button class="btn ghost" id="undoBtn" type="button" title="Letzten Take verwerfen">Undo</button>
+          <button class="btn ghost" id="clearClipBtn" type="button" title="Loop leeren">Clear Clip</button>
+        </div>
+
+        <div class="tp-position">
+          <span class="pos" id="posDisplay">1.1.1</span>
+          <div class="loop-progress"><i id="loopProgress"></i></div>
+          <span class="take-info" id="takeInfo">leer</span>
+        </div>
+      </section>
+
       <main class="rack">
         <!-- ---------------------------------------------------------- links -->
         <div class="col">
@@ -46,14 +96,14 @@
               <div class="osc">
                 <div class="osc-head">
                   <span class="chip">OSC 1</span>
-                  <div class="seg" id="segOsc1"></div>
+                  <div id="segOsc1"></div>
                 </div>
                 <div class="knobs" id="knobsOsc1"></div>
               </div>
               <div class="osc">
                 <div class="osc-head">
                   <span class="chip">OSC 2</span>
-                  <div class="seg" id="segOsc2"></div>
+                  <div id="segOsc2"></div>
                 </div>
                 <div class="knobs" id="knobsOsc2"></div>
               </div>
@@ -72,7 +122,7 @@
                   <canvas class="lfo-scope" id="lfo1Scope"></canvas>
                 </div>
                 <div class="lfo-controls">
-                  <div class="seg" id="segLfo1"></div>
+                  <div id="segLfo1"></div>
                   <div class="knobs" id="knobsLfo1"></div>
                 </div>
               </div>
@@ -82,7 +132,7 @@
                   <canvas class="lfo-scope" id="lfo2Scope"></canvas>
                 </div>
                 <div class="lfo-controls">
-                  <div class="seg" id="segLfo2"></div>
+                  <div id="segLfo2"></div>
                   <div class="knobs" id="knobsLfo2"></div>
                 </div>
               </div>
@@ -154,7 +204,7 @@
             <div class="panel-body">
               <div class="osc-head">
                 <span class="chip">VCF</span>
-                <div class="seg" id="segFilter"></div>
+                <div id="segFilter"></div>
               </div>
               <div class="knobs" id="knobsFilter"></div>
             </div>
@@ -183,15 +233,21 @@
       </main>
 
       <footer class="keybed">
-        <div class="keybed-side">
-          <div class="octave">
-            <button class="btn oct" id="octDown" type="button" aria-label="Oktave tiefer">−</button>
-            <span id="octLabel">C3 – C5</span>
-            <button class="btn oct" id="octUp" type="button" aria-label="Oktave höher">+</button>
-          </div>
-          <p class="hint">Rechner-Tasten: A W S E D F T G Y H U J K · Z / X = Oktave</p>
+        <div class="clip-strip">
+          <canvas id="clipCanvas" aria-label="Loop-Inhalt"></canvas>
+          <span class="clip-badge" id="clipBadge">Loop 4 Bars · leer</span>
         </div>
-        <div class="keys" id="keys"></div>
+        <div class="keybed-row">
+          <div class="keybed-side">
+            <div class="octave">
+              <button class="btn oct" id="octDown" type="button" aria-label="Oktave tiefer">−</button>
+              <span id="octLabel">C3 – B4</span>
+              <button class="btn oct" id="octUp" type="button" aria-label="Oktave höher">+</button>
+            </div>
+            <p class="hint">Rechner-Tasten: A W S E D F T G Y H U J K · Z / X = Oktave<br />REC drücken und drüberspielen = Overdub</p>
+          </div>
+          <div class="keys" id="keys"></div>
+        </div>
       </footer>
     </div>
 
@@ -201,7 +257,8 @@
         <h2>Bereit für Modulation</h2>
         <p>
           Der Browser erlaubt Audio erst nach einer Interaktion. Starte die Engine, dann spiele
-          mit dem Keyboard oder den Tasten A – K.
+          mit dem Keyboard oder den Tasten A – K. Mit <strong>REC</strong> nimmt der Loop
+          dein Spiel auf, <strong>Overdub</strong> legt jede weitere Runde eine Schicht drauf.
         </p>
         <button class="btn big" id="gateBtn" type="button">AUDIO STARTEN</button>
         <p class="hint">Kopfhörer oder Monitore empfohlen · Mod-Wheel mit der Maus ziehen</p>
