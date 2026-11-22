@@ -49,7 +49,7 @@ programmieren, sowie Drumpads."
 
 | Paket | Ergebnis |
 | --- | --- |
-| P6.1–P6.5 | umgesetzt; `npm test` 117/117, `npm run test:ui` 139/139 |
+| P6.1–P6.5 | umgesetzt; `npm test` 116/116, `npm run test:ui` 139/139 |
 
 Abweichungen vom Plan: Das MIDI-Panel bekam zusätzlich einen Monitor (zeigt die letzte
 Roh-Nachricht), UI-Aktualisierungen aus CC-Strömen werden per `requestAnimationFrame`

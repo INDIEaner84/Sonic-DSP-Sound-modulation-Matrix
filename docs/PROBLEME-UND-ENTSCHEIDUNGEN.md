@@ -108,7 +108,7 @@ der Server bleibt `require`-basiert und dependency-frei. `npm start` ist unverä
 
 | Prüfung | Kommando | Ergebnis |
 | --- | --- | --- |
-| Unit-/Integrationstests | `npm test` | **117/117** |
+| Unit-/Integrationstests | `npm test` | **116/116** |
 | inkl. UI (jsdom) | `npm run test:ui` | **139/139** |
 | Syntax aller Module | `node --check js/*.js` | fehlerfrei |
 | Server-Smoke | `node server.cjs` + `curl /` | 200, korrekte Content-Types |
