@@ -1,13 +1,15 @@
-/* Sonic DSP — Audio Engine
- * Polyphoner subtraktiver Synth (2 Oszillatoren, Filter, 2 Hüllkurven)
- * mit frei verschaltbarer Modulationsmatrix und zeitgenauer Notenplanung.
+/* Sonic DSP — Audio Engine (mehrspurig)
+ * Pro Projektspur eine eigene Kette: voices → input → pan → gain → master.
+ * Der Klang kommt aus dem Patch der jeweiligen Spur; LFOs sind projektweit
+ * (eine gemeinsame Phase für alle Spuren, siehe E-03 in der Entscheidungsliste).
  *
  * Die Modulationsmatrix läuft auf Control-Rate (60 Hz) in JS und schreibt
  * geglättete Werte über setTargetAtTime in die AudioParams. Noten können mit
- * einer exakten Startzeit (`when`) geplant werden – das nutzt der Sequencer.
+ * exakter Startzeit (`when`) geplant werden – das nutzt der Sequencer.
  */
 
 import { SOURCES, DESTS, clamp } from './state.js';
+import { trackAudible } from './project.js';
 
 const TWO_PI = Math.PI * 2;
 export const midiToHz = (n) => 440 * Math.pow(2, (n - 69) / 12);
@@ -120,10 +122,19 @@ class LFO {
 /* ------------------------------------------------------------------- Voice */
 
 class Voice {
-  constructor(engine, note, velocity, when) {
+  /**
+   * @param {object} engine
+   * @param {object} chain Spurkette {track, input, pan, gain}
+   * @param {number} note
+   * @param {number} velocity
+   * @param {number|null} when
+   */
+  constructor(engine, chain, note, velocity, when) {
     this.engine = engine;
+    this.chain = chain;
+    this.track = chain.track;
     const ctx = engine.ctx;
-    const s = engine.state;
+    const s = this.track.patch;
 
     this.note = note;
     this.velocity = clamp(velocity, 0.05, 1);
@@ -165,9 +176,8 @@ class Voice {
     this.g2.connect(this.filter);
     this.filter.connect(this.vca);
     this.vca.connect(this.panner);
-    this.panner.connect(engine.bus);
+    this.panner.connect(chain.input);
 
-    /* Grundwerte exakt zur Startzeit setzen (geplante Noten!) */
     const t0 = this.startAt;
     this.osc1.frequency.setValueAtTime(midiToHz(note + s.osc1.octave * 12 + s.osc1.detune / 100), t0);
     this.osc2.frequency.setValueAtTime(midiToHz(note + s.osc2.octave * 12 + s.osc2.detune / 100), t0);
@@ -198,7 +208,8 @@ class Voice {
   }
 
   tick(now) {
-    const s = this.engine.state;
+    const s = this.track.patch;
+    const project = this.engine.project;
 
     if (!this.triggered) {
       if (now + 0.0005 < this.startAt) return;
@@ -221,10 +232,8 @@ class Voice {
     const amp = this.ampEnv.advance(now);
     const modEnv = this.modEnv.advance(now);
 
-    /* Glide (Portamento) */
     if (s.glide > 0.001) {
-      const dt = 1 / 60;
-      const k = Math.min(1, dt / s.glide);
+      const k = Math.min(1, 1 / 60 / s.glide);
       this.pitch += (this.note - this.pitch) * k;
     } else {
       this.pitch = this.note;
@@ -235,10 +244,9 @@ class Voice {
       lfo2: this.engine.lfoVal.lfo2,
       env2: modEnv,
       vel: this.velocity,
-      mw: s.modWheel,
+      mw: project ? project.modWheel : 0,
       key: clamp((this.note - 60) / 24, -1, 1),
     };
-    this.engine.srcSnapshot = src;
 
     const sums = { pitch1: 0, pitch2: 0, level1: 0, level2: 0, cutoff: 0, reso: 0, pan: 0, lfo1rate: 0 };
     for (const so of SOURCES) {
@@ -249,7 +257,7 @@ class Voice {
         if (amount) sums[de.id] += v * (amount / 100);
       }
     }
-    this.engine.lastSums = sums;
+    this.engine.activity.set(this.track.id, { src, sums });
 
     const f1 = midiToHz(this.pitch + sums.pitch1 * 12 + s.osc1.octave * 12 + s.osc1.detune / 100);
     const f2 = midiToHz(this.pitch + sums.pitch2 * 12 + s.osc2.octave * 12 + s.osc2.detune / 100);
@@ -296,44 +304,52 @@ class Voice {
 /* ------------------------------------------------------------------ Engine */
 
 export class Engine {
-  constructor(state) {
-    this.state = state;
+  constructor() {
     this.ctx = null;
+    this.project = null;
+    this.chains = new Map(); // trackId -> {track, input, pan, gain}
     this.voices = new Set();
+    this.activity = new Map(); // trackId -> {src, sums}
     this.lfo1 = new LFO();
     this.lfo2 = new LFO();
     this.lfoVal = { lfo1: 0, lfo2: 0 };
     this.lfoRate = { lfo1: 0, lfo2: 0 };
-    this.lastSums = null;
-    this.srcSnapshot = { lfo1: 0, lfo2: 0, env2: 0, vel: 0, mw: 0, key: 0 };
-    this.maxVoices = 16;
+    this.maxVoices = 24;
     this._last = 0;
     this._timer = null;
     this.onStateChange = null;
   }
 
-  async init() {
+  /**
+   * Startet die Engine. `context` erlaubt Injektion (Tests, Offline-Rendering).
+   */
+  async init({ context = null } = {}) {
     if (!this.ctx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      this.ctx = new AC({ latencyHint: 'interactive' });
+      let ctx = context;
+      if (!ctx) {
+        const AC = typeof window !== 'undefined' ? window.AudioContext || window.webkitAudioContext : null;
+        if (!AC) throw new Error('Web Audio API nicht verfügbar');
+        ctx = new AC({ latencyHint: 'interactive' });
+      }
+      this.ctx = ctx;
 
-      this.bus = this.ctx.createGain();
+      this.bus = ctx.createGain();
       this.bus.gain.value = 0.9;
 
-      this.master = this.ctx.createGain();
-      this.master.gain.value = this.state.master;
+      this.master = ctx.createGain();
+      this.master.gain.value = this.project ? this.project.master : 0.72;
 
-      this.metroGain = this.ctx.createGain();
+      this.metroGain = ctx.createGain();
       this.metroGain.gain.value = 0.5;
 
-      this.comp = this.ctx.createDynamicsCompressor();
+      this.comp = ctx.createDynamicsCompressor();
       this.comp.threshold.value = -14;
       this.comp.knee.value = 22;
       this.comp.ratio.value = 5;
       this.comp.attack.value = 0.004;
       this.comp.release.value = 0.18;
 
-      this.analyser = this.ctx.createAnalyser();
+      this.analyser = ctx.createAnalyser();
       this.analyser.fftSize = 2048;
       this.analyser.smoothingTimeConstant = 0.6;
 
@@ -341,12 +357,13 @@ export class Engine {
       this.metroGain.connect(this.master);
       this.master.connect(this.comp);
       this.comp.connect(this.analyser);
-      this.analyser.connect(this.ctx.destination);
+      this.analyser.connect(ctx.destination);
 
+      this.syncTracks();
       if (!this._timer) this._timer = setInterval(() => this.tick(), 15);
       if (this.onStateChange) this.onStateChange(this.ctx.state);
     }
-    if (this.ctx.state !== 'running') {
+    if (this.ctx.state !== 'running' && this.ctx.resume) {
       try {
         await this.ctx.resume();
       } catch (e) {
@@ -358,23 +375,67 @@ export class Engine {
   }
 
   async suspend() {
-    if (this.ctx) await this.ctx.suspend();
+    if (this.ctx && this.ctx.suspend) await this.ctx.suspend();
     if (this.onStateChange) this.onStateChange(this.ctx ? this.ctx.state : 'closed');
+  }
+
+  setProject(project) {
+    this.project = project;
+    if (this.ctx) this.syncTracks();
+  }
+
+  /** Legt für neue Spuren Audioketten an und entfernt gelöschte. */
+  syncTracks() {
+    if (!this.ctx || !this.project) return;
+    const ids = new Set(this.project.tracks.map((t) => t.id));
+    for (const [id, chain] of [...this.chains]) {
+      if (!ids.has(id)) {
+        for (const v of this.voices) if (v.track.id === id) v.release(this.ctx.currentTime);
+        try {
+          chain.input.disconnect();
+          chain.pan.disconnect();
+          chain.gain.disconnect();
+        } catch (e) {
+          /* ignore */
+        }
+        this.chains.delete(id);
+        this.activity.delete(id);
+      }
+    }
+    for (const track of this.project.tracks) {
+      if (this.chains.has(track.id)) continue;
+      const input = this.ctx.createGain();
+      const pan = this.ctx.createStereoPanner();
+      const gain = this.ctx.createGain();
+      gain.gain.value = trackAudible(track, this.project.tracks) ? track.gain : 0;
+      input.connect(pan);
+      pan.connect(gain);
+      gain.connect(this.bus);
+      this.chains.set(track.id, { track, input, pan, gain });
+    }
   }
 
   tick() {
     const ctx = this.ctx;
-    if (!ctx) return;
+    if (!ctx || !this.project) return;
     const now = ctx.currentTime;
     let dt = this._last ? now - this._last : 1 / 60;
     this._last = now;
     dt = clamp(dt, 0.001, 0.1);
 
-    const s = this.state;
-    const rate1 = clamp(s.lfo1.rate * Math.pow(2, (this.lastSums ? this.lastSums.lfo1rate : 0) * 2), 0.02, 40);
-    const rate2 = clamp(s.lfo2.rate, 0.02, 40);
-    this.lfoVal.lfo1 = this.lfo1.advance(rate1, dt, s.lfo1.shape);
-    this.lfoVal.lfo2 = this.lfo2.advance(rate2, dt, s.lfo2.shape);
+    /* LFO-Rate kann über die Matrix moduliert werden: stärkster Wert zählt. */
+    let rateMod = 0;
+    for (const a of this.activity.values()) {
+      if (Math.abs(a.sums.lfo1rate) > Math.abs(rateMod)) rateMod = a.sums.lfo1rate;
+    }
+    const leadTrack = this.project.tracks[0];
+    const leadPatch = leadTrack ? leadTrack.patch : null;
+    const rate1Base = leadPatch ? leadPatch.lfo1.rate : 2;
+    const rate2Base = leadPatch ? leadPatch.lfo2.rate : 0.3;
+    const rate1 = clamp(rate1Base * Math.pow(2, rateMod * 2), 0.02, 40);
+    const rate2 = clamp(rate2Base, 0.02, 40);
+    this.lfoVal.lfo1 = this.lfo1.advance(rate1, dt, leadPatch ? leadPatch.lfo1.shape : 'sine');
+    this.lfoVal.lfo2 = this.lfo2.advance(rate2, dt, leadPatch ? leadPatch.lfo2.shape : 'tri');
     this.lfoRate.lfo1 = rate1;
     this.lfoRate.lfo2 = rate2;
 
@@ -387,8 +448,15 @@ export class Engine {
       this.voices.delete(v);
       v.dispose();
     }
+    if (!this.voices.size) this.activity.clear();
 
-    this.master.gain.setTargetAtTime(s.master, now, 0.03);
+    /* Mute/Solo/Pegel – eine gemeinsame Regel für alle Spuren */
+    for (const chain of this.chains.values()) {
+      const audible = trackAudible(chain.track, this.project.tracks);
+      chain.gain.gain.setTargetAtTime(audible ? clamp(chain.track.gain, 0, 1.5) : 0, now, 0.02);
+    }
+
+    this.master.gain.setTargetAtTime(this.project.master, now, 0.03);
   }
 
   _steal(at) {
@@ -401,27 +469,28 @@ export class Engine {
   }
 
   /** Note starten – optional zu einem exakten Zeitpunkt. Gibt die Stimme zurück. */
-  noteOn(note, velocity = 0.8, when = null) {
+  noteOn(trackId, note, velocity = 0.8, when = null) {
     if (!this.ctx) return null;
+    const chain = this.chains.get(trackId);
+    if (!chain) return null;
     const at = Math.max(when != null ? when : this.ctx.currentTime, this.ctx.currentTime);
 
-    /* Direkt gespielte Noten: gleiche Note neu anschlagen */
     if (when == null) {
       for (const v of this.voices) {
-        if (v.note === note && !v.released && v.startAt <= at + 0.001) v.release(at);
+        if (v.track.id === trackId && v.note === note && !v.released && v.startAt <= at + 0.001) v.release(at);
       }
     }
     this._steal(at);
-    const voice = new Voice(this, note, velocity, at);
+    const voice = new Voice(this, chain, note, velocity, at);
     this.voices.add(voice);
     return voice;
   }
 
-  noteOff(note, when = null) {
+  noteOff(trackId, note, when = null) {
     if (!this.ctx) return;
     const at = Math.max(when != null ? when : this.ctx.currentTime, this.ctx.currentTime);
     for (const v of this.voices) {
-      if (v.note === note && !v.released && v.startAt <= at + 0.001) v.release(at);
+      if (v.track.id === trackId && v.note === note && !v.released && v.startAt <= at + 0.001) v.release(at);
     }
   }
 
@@ -429,9 +498,11 @@ export class Engine {
     if (voice) voice.scheduleRelease(at);
   }
 
-  allNotesOff() {
+  allNotesOff(trackId = null) {
     const at = this.ctx ? this.ctx.currentTime : 0;
-    for (const v of this.voices) v.release(at);
+    for (const v of this.voices) {
+      if (!trackId || v.track.id === trackId) v.release(at);
+    }
   }
 
   /** Metronom-Klick (kurz, synthetisch – kein Sample nötig). */
@@ -453,9 +524,10 @@ export class Engine {
   }
 
   /** Waveform / Filtertyp live auf klingende Stimmen anwenden. */
-  refreshVoices() {
-    const s = this.state;
+  refreshVoices(trackId = null) {
     for (const v of this.voices) {
+      if (trackId && v.track.id !== trackId) continue;
+      const s = v.track.patch;
       v.osc1.type = s.osc1.wave;
       v.osc2.type = s.osc2.wave;
       v.filter.type = s.filter.type;

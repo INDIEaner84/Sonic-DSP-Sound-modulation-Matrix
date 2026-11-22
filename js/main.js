@@ -1,10 +1,12 @@
 /* Sonic DSP — App-Verdrahtung
- * Verbindet Patch-State, Audio-Engine, Clock/Loop-Recorder und UI-Bausteine.
+ * Verbindet Projektmodell, Audio-Engine, Clock/Recorder, MIDI und UI.
+ * Der Rack-Bereich (Knobs, Matrix, LFO) bearbeitet immer den Patch der
+ * aktiven Spur; projektweite Werte (Master, Mod-Wheel, Tempo) liegen im Projekt.
  */
 
 import {
-  state,
   PRESETS,
+  DEFAULT_PATCH,
   buildPatch,
   SOURCES,
   DESTS,
@@ -12,13 +14,27 @@ import {
   LFO_SHAPES,
   FILTER_TYPES,
   clamp,
-  getPath,
-  setPath,
+  getIn,
+  setIn,
   mulberry32,
 } from './state.js';
 import { Engine } from './audio.js';
 import { Clock } from './clock.js';
-import { Clip } from './clip.js';
+import {
+  LIMITS,
+  createProject,
+  createTrack,
+  activeTrackOf,
+  deserialize,
+  serialize,
+  saveLocal,
+  loadLocal,
+  downloadBlob,
+  safeFilename,
+  readTextFile,
+  readBinaryFile,
+} from './project.js';
+import { encodeProject, decodeToProject, defaultImportPatches } from './midi-io.js';
 import {
   createKnob,
   createSeg,
@@ -26,6 +42,7 @@ import {
   createMatrix,
   createKeyboard,
   createSlider,
+  createTrackList,
   Scope,
   LfoPreview,
   ClipStrip,
@@ -33,26 +50,87 @@ import {
   noteName,
 } from './ui.js';
 
-const engine = new Engine(state);
-const clip = new Clip();
-const clock = new Clock(engine, clip);
+/* ------------------------------------------------------------------ Zustand */
+
+function freshProject() {
+  const lead = createTrack({ name: 'Lead', patchName: 'Init Lead' });
+  return createProject({ name: 'Neues Projekt', tracks: [lead], activeTrackId: lead.id });
+}
+
+const restored = loadLocal();
+let project = restored.ok ? restored.project : freshProject();
+
+const engine = new Engine();
+engine.setProject(project);
+const clock = new Clock(engine, project);
 
 const knobs = [];
 const segs = [];
 
+const activeTrack = () => activeTrackOf(project);
+const getPatch = () => {
+  const t = activeTrack();
+  return t ? t.patch : DEFAULT_PATCH;
+};
+
+/* ------------------------------------------------------------------- Toasts */
+
+let toastTimer = null;
+function toast(message, kind = 'info') {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = message;
+  el.className = `toast show ${kind}`;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 4200);
+}
+
+/* --------------------------------------------------------------- Autosave */
+
+let saveTimer = null;
+let lastSaveAt = null;
+
+function setSaveState(text, kind = '') {
+  const el = document.getElementById('saveState');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'save-state' + (kind ? ' ' + kind : '');
+}
+
+function saveNow() {
+  const result = saveLocal(project);
+  if (result.ok) {
+    lastSaveAt = result.at;
+    setSaveState(`gespeichert ${lastSaveAt.toLocaleTimeString('de-DE')}`, 'ok');
+  } else {
+    setSaveState(result.error || 'nicht gespeichert', 'err');
+  }
+}
+
+function scheduleSave() {
+  setSaveState('ungespeichert …', 'dirty');
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveNow();
+  }, 700);
+}
+
 /* ------------------------------------------------------------- Knob-Helfer */
 
-function addKnob(slot, path, opts) {
-  const parent = typeof slot === 'string' ? document.getElementById(slot) : slot;
+function addKnob(slot, path, opts = {}) {
+  const parent = document.getElementById(slot);
   if (!parent) return null;
   const knob = createKnob(parent, {
-    value: getPath(path),
-    def: opts.def != null ? opts.def : getPath(path),
-    onChange: (v) => {
-      setPath(path, v);
-      if (opts.after) opts.after(v);
-    },
+    value: getIn(getPatch(), path),
+    def: opts.def != null ? opts.def : getIn(DEFAULT_PATCH, path),
     ...opts,
+    onChange: (v) => {
+      const patch = getPatch();
+      if (patch) setIn(patch, path, v);
+      if (opts.after) opts.after(v);
+      scheduleSave();
+    },
   });
   knobs.push({ path, knob });
   return knob;
@@ -63,10 +141,12 @@ function addSeg(slot, path, options, after) {
   if (!parent) return null;
   const seg = createSeg(parent, {
     options,
-    value: getPath(path),
+    value: getIn(getPatch(), path),
     onChange: (v) => {
-      setPath(path, v);
+      const patch = getPatch();
+      if (patch) setIn(patch, path, v);
       if (after) after(v);
+      scheduleSave();
     },
   });
   segs.push({ path, seg });
@@ -75,19 +155,19 @@ function addSeg(slot, path, options, after) {
 
 /* --------------------------------------------------------- Oszillatoren */
 
-addSeg('segOsc1', 'osc1.wave', WAVES, () => engine.refreshVoices());
+addSeg('segOsc1', 'osc1.wave', WAVES, () => engine.refreshVoices(project.activeTrackId));
 addKnob('knobsOsc1', 'osc1.level', { min: 0, max: 1, label: 'LEVEL', format: fmt.pct });
 addKnob('knobsOsc1', 'osc1.octave', { min: -2, max: 2, step: 1, label: 'OCTAVE', format: fmt.oct });
 addKnob('knobsOsc1', 'osc1.detune', { min: -50, max: 50, label: 'DETUNE', format: fmt.cents, def: 0 });
 
-addSeg('segOsc2', 'osc2.wave', WAVES, () => engine.refreshVoices());
+addSeg('segOsc2', 'osc2.wave', WAVES, () => engine.refreshVoices(project.activeTrackId));
 addKnob('knobsOsc2', 'osc2.level', { min: 0, max: 1, label: 'LEVEL', format: fmt.pct });
 addKnob('knobsOsc2', 'osc2.octave', { min: -2, max: 2, step: 1, label: 'OCTAVE', format: fmt.oct });
 addKnob('knobsOsc2', 'osc2.detune', { min: -50, max: 50, label: 'DETUNE', format: fmt.cents, def: 0 });
 
 /* ------------------------------------------------------------------ Filter */
 
-addSeg('segFilter', 'filter.type', FILTER_TYPES, () => engine.refreshVoices());
+addSeg('segFilter', 'filter.type', FILTER_TYPES, () => engine.refreshVoices(project.activeTrackId));
 addKnob('knobsFilter', 'filter.cutoff', {
   min: 40,
   max: 14000,
@@ -115,7 +195,7 @@ envOpts.forEach((o) => {
     curve: o.curve,
     label: o.label,
     format: o.format,
-    def: getPath(`ampEnv.${o.key}`),
+    def: getIn(DEFAULT_PATCH, `ampEnv.${o.key}`),
   });
   addKnob('knobsModEnv', `modEnv.${o.key}`, {
     min: o.min,
@@ -123,7 +203,7 @@ envOpts.forEach((o) => {
     curve: o.curve,
     label: o.label,
     format: o.format,
-    def: getPath(`modEnv.${o.key}`),
+    def: getIn(DEFAULT_PATCH, `modEnv.${o.key}`),
   });
 });
 
@@ -145,22 +225,26 @@ addKnob('knobsPerf', 'glide', {
 });
 
 const wheel = createWheel(document.getElementById('modWheel'), {
-  value: state.modWheel,
+  value: project.modWheel,
   onChange: (v) => {
-    state.modWheel = v;
+    project.modWheel = v;
+    scheduleSave();
   },
 });
 
 /* ------------------------------------------------------------------ Master */
 
-const masterKnob = addKnob('masterKnobSlot', 'master', {
+const masterKnob = createKnob(document.getElementById('masterKnobSlot'), {
   min: 0,
   max: 1,
   label: 'MASTER',
   format: fmt.pct,
   def: 0.72,
-  after: (v) => {
+  value: project.master,
+  onChange: (v) => {
+    project.master = v;
     if (engine.master && engine.ctx) engine.master.gain.setTargetAtTime(v, engine.ctx.currentTime, 0.02);
+    scheduleSave();
   },
 });
 if (masterKnob) masterKnob.el.classList.add('master-knob');
@@ -168,8 +252,10 @@ if (masterKnob) masterKnob.el.classList.add('master-knob');
 /* ------------------------------------------------------------------ Matrix */
 
 const matrix = createMatrix(document.getElementById('matrix'), {
+  getPatch,
   onChange: () => {
     matrix.refresh();
+    scheduleSave();
   },
 });
 
@@ -225,7 +311,7 @@ const KEYMAP = {
   p: 15,
   ';': 16,
 };
-const pressedKeys = new Map(); // keyboard-key -> note
+const pressedKeys = new Map();
 
 document.addEventListener('keydown', (e) => {
   const tag = (e.target && e.target.tagName) || '';
@@ -287,13 +373,210 @@ const scope = new Scope(document.getElementById('scope'), {
   stateEl: document.getElementById('scopeState'),
   dbEl: document.getElementById('scopeDb'),
 });
-const lfo1Preview = new LfoPreview(document.getElementById('lfo1Scope'), engine, 'lfo1', '#ffb245');
-const lfo2Preview = new LfoPreview(document.getElementById('lfo2Scope'), engine, 'lfo2', '#54d7c7');
+const lfo1Preview = new LfoPreview(document.getElementById('lfo1Scope'), engine, 'lfo1', '#ffb245', getPatch);
+const lfo2Preview = new LfoPreview(document.getElementById('lfo2Scope'), engine, 'lfo2', '#54d7c7', getPatch);
 
 const strip = new ClipStrip(document.getElementById('clipCanvas'), {
   clock,
-  clip,
+  getClip: () => {
+    const t = activeTrack();
+    return t ? t.clip : null;
+  },
   badgeEl: document.getElementById('clipBadge'),
+});
+
+/* ------------------------------------------------------------- Spur-Liste */
+
+const trackList = createTrackList(document.getElementById('tracks'), {
+  getTracks: () => project.tracks,
+  getActiveId: () => project.activeTrackId,
+  onSelect: (id) => {
+    if (project.activeTrackId === id) return;
+    project.activeTrackId = id;
+    trackList.build();
+    refreshUI();
+    syncTransportUI();
+    scheduleSave();
+  },
+  onMute: (id) => {
+    const t = project.tracks.find((x) => x.id === id);
+    if (!t) return;
+    t.mute = !t.mute;
+    trackList.build();
+    syncTransportUI();
+    scheduleSave();
+  },
+  onSolo: (id) => {
+    const t = project.tracks.find((x) => x.id === id);
+    if (!t) return;
+    t.solo = !t.solo;
+    trackList.build();
+    syncTransportUI();
+    scheduleSave();
+  },
+  onGain: (id, value) => {
+    const t = project.tracks.find((x) => x.id === id);
+    if (!t) return;
+    t.gain = clamp(value, 0, LIMITS.maxGain);
+    scheduleSave();
+  },
+  onRename: (id, name) => {
+    const t = project.tracks.find((x) => x.id === id);
+    if (!t) return;
+    t.name = name;
+    trackList.build();
+    scheduleSave();
+  },
+  onDelete: (id) => deleteTrack(id),
+});
+
+function addTrack() {
+  if (project.tracks.length >= LIMITS.maxTracks) {
+    toast(`Maximal ${LIMITS.maxTracks} Spuren`, 'warn');
+    return;
+  }
+  clock.panic();
+  const track = createTrack({ name: `Track ${project.tracks.length + 1}`, patchName: 'Init Lead' });
+  project.tracks.push(track);
+  project.activeTrackId = track.id;
+  engine.syncTracks();
+  trackList.build();
+  refreshUI();
+  syncTransportUI();
+  scheduleSave();
+  toast(`Spur „${track.name}" angelegt`, 'ok');
+}
+
+function deleteTrack(id) {
+  if (project.tracks.length <= 1) {
+    toast('Die letzte Spur kann nicht gelöscht werden', 'warn');
+    return;
+  }
+  const index = project.tracks.findIndex((t) => t.id === id);
+  if (index < 0) return;
+  clock.panic();
+  const [removed] = project.tracks.splice(index, 1);
+  if (project.activeTrackId === id) {
+    project.activeTrackId = project.tracks[Math.max(0, index - 1)].id;
+  }
+  engine.syncTracks();
+  trackList.build();
+  refreshUI();
+  syncTransportUI();
+  scheduleSave();
+  toast(`Spur „${removed.name}" gelöscht`, 'info');
+}
+
+document.getElementById('addTrackBtn').addEventListener('click', addTrack);
+
+/* ------------------------------------------------ Projektleiste / MIDI / Save */
+
+const projectNameInput = document.getElementById('projectName');
+projectNameInput.addEventListener('change', () => {
+  const value = projectNameInput.value.trim().slice(0, LIMITS.maxProjectName);
+  project.name = value || 'Projekt';
+  projectNameInput.value = project.name;
+  scheduleSave();
+});
+
+function downloadJson() {
+  const json = JSON.stringify(serialize(project), null, 2);
+  const ok = downloadBlob(new Blob([json], { type: 'application/json' }), safeFilename(project.name, 'json'));
+  toast(ok ? 'Projekt als JSON gespeichert' : 'Download nicht verfügbar', ok ? 'ok' : 'warn');
+  saveNow();
+}
+
+async function loadJsonFile(file) {
+  const read = await readTextFile(file);
+  if (!read.ok) {
+    toast(read.error, 'warn');
+    return;
+  }
+  const result = deserialize(read.text);
+  if (!result.ok) {
+    toast('Import abgelehnt: ' + result.errors.slice(0, 2).join(' · '), 'warn');
+    return;
+  }
+  replaceProject(result.project);
+  toast(
+    result.warnings.length ? `Projekt geladen (${result.warnings.length} Hinweis(e))` : 'Projekt geladen',
+    'ok'
+  );
+}
+
+function newProject() {
+  if (!window.confirm('Neues Projekt starten? Der aktuelle Stand wird verworfen (vorher speichern!).')) return;
+  clock.stop();
+  replaceProject(freshProject());
+  toast('Neues Projekt', 'info');
+}
+
+/**
+ * Ersetzt das Projekt, ohne die Objektidentität zu wechseln: Das exportierte
+ * `project` bleibt dieselbe Referenz (wichtig für UI-Bindings und Tests).
+ */
+function replaceProject(next) {
+  if (next !== project) {
+    for (const key of Object.keys(project)) delete project[key];
+    Object.assign(project, next);
+  }
+  engine.setProject(project);
+  clock.setProject(project);
+  baseNote = 48;
+  keyboard.setBase(baseNote);
+  updateOctaveLabel();
+  refreshUI();
+  trackList.build();
+  syncTransportUI();
+  projectNameInput.value = project.name;
+  scheduleSave();
+}
+
+document.getElementById('saveBtn').addEventListener('click', downloadJson);
+
+const fileInput = document.getElementById('fileInput');
+document.getElementById('loadBtn').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', async () => {
+  const file = fileInput.files && fileInput.files[0];
+  fileInput.value = '';
+  if (file) await loadJsonFile(file);
+});
+
+document.getElementById('newBtn').addEventListener('click', newProject);
+
+document.getElementById('midiExportBtn').addEventListener('click', () => {
+  const repeats = Number(document.getElementById('midiRepeats').value) || 1;
+  try {
+    const bytes = encodeProject(project, { repeats });
+    const ok = downloadBlob(new Blob([bytes], { type: 'audio/midi' }), safeFilename(project.name, 'mid'));
+    toast(ok ? `MIDI exportiert (${Math.round(bytes.length / 1024)} KB, ${repeats}× Loop)` : 'Download nicht verfügbar', ok ? 'ok' : 'warn');
+  } catch (err) {
+    toast('MIDI-Export fehlgeschlagen: ' + err.message, 'warn');
+  }
+});
+
+const midiInput = document.getElementById('midiInput');
+document.getElementById('midiImportBtn').addEventListener('click', () => midiInput.click());
+midiInput.addEventListener('change', async () => {
+  const file = midiInput.files && midiInput.files[0];
+  midiInput.value = '';
+  if (!file) return;
+  const read = await readBinaryFile(file);
+  if (!read.ok) {
+    toast(read.error, 'warn');
+    return;
+  }
+  const imported = decodeToProject(read.bytes, {
+    name: file.name.replace(/\.(mid|midi)$/i, '') || 'MIDI-Import',
+    patches: defaultImportPatches(),
+  });
+  if (!imported.ok) {
+    toast('MIDI-Import abgelehnt: ' + imported.errors.slice(0, 2).join(' · '), 'warn');
+    return;
+  }
+  clock.stop();
+  replaceProject(imported.project);
+  toast(`MIDI importiert: ${imported.project.tracks.length} Spuren, ${imported.project.bars} Bars`, 'ok');
 });
 
 /* ------------------------------------------------------------------ Transport */
@@ -316,46 +599,63 @@ const loopSeg = createSeg(document.getElementById('segLoop'), {
   onChange: (v) => {
     clock.setBars(Number(v));
     syncTransportUI();
+    scheduleSave();
   },
 });
 
 const quantSeg = createSeg(document.getElementById('segQuant'), {
   options: [
     { v: '0', label: 'OFF' },
-    { v: '240', label: '1/8' },
-    { v: '120', label: '1/16' },
     { v: '60', label: '1/32' },
+    { v: '120', label: '1/16' },
+    { v: '240', label: '1/8' },
   ],
   value: String(clock.quantizeStep),
-  onChange: (v) => clock.setQuantize(Number(v)),
+  onChange: (v) => {
+    clock.setQuantize(Number(v));
+    scheduleSave();
+  },
 });
 
-createSlider(document.getElementById('swingSlider'), {
+const swingSlider = createSlider(document.getElementById('swingSlider'), {
   label: 'SWING',
   min: 0,
   max: 0.6,
   value: clock.swing,
   format: (v) => Math.round(v * 100) + '%',
-  onChange: (v) => clock.setSwing(v),
+  onChange: (v) => {
+    clock.setSwing(v);
+    scheduleSave();
+  },
 });
 
 function syncTransportUI() {
+  const track = activeTrack();
   document.body.classList.toggle('is-playing', clock.running);
   document.body.classList.toggle('is-recording', clock.recording);
   recBtn.classList.toggle('on', clock.recording);
   playBtn.classList.toggle('on', clock.running);
   recLabel.textContent = clock.recording ? 'Rec…' : 'Rec';
   playLabel.textContent = clock.running ? 'Stop' : 'Play';
-  undoBtn.disabled = clip.takeCount === 0;
-  clearClipBtn.disabled = clip.count === 0;
+  undoBtn.disabled = !track || track.clip.takeCount === 0;
+  clearClipBtn.disabled = !track || track.clip.count === 0;
   metroBtn.classList.toggle('on', clock.metronome);
   bpmVal.textContent = String(clock.bpm);
-  takeInfo.textContent = clip.count
-    ? `${clip.count} Noten · ${clip.takeCount} ${clip.takeCount === 1 ? 'Take' : 'Takes'}`
-    : 'leer';
+  takeInfo.textContent = track
+    ? `${track.clip.count} Noten · ${track.clip.takeCount} ${track.clip.takeCount === 1 ? 'Take' : 'Takes'}`
+    : '–';
+  const tag = document.getElementById('trackTag');
+  if (tag) tag.textContent = `${project.tracks.length} / ${LIMITS.maxTracks}`;
+  loopSeg.set(String(clock.bars));
+  quantSeg.set(String(clock.quantizeStep));
+  swingSlider.set(clock.swing);
 }
 
-clock.onChange(syncTransportUI);
+clock.onChange(() => {
+  trackList.build();
+  syncTransportUI();
+  scheduleSave();
+});
 
 async function togglePlay() {
   await ensureAudio();
@@ -378,22 +678,26 @@ recBtn.addEventListener('click', toggleRec);
 undoBtn.addEventListener('click', () => {
   clock.undo();
   syncTransportUI();
+  scheduleSave();
 });
 
 clearClipBtn.addEventListener('click', () => {
   if (clock.recording) clock.endRecording();
   clock.clearClip();
   syncTransportUI();
+  scheduleSave();
 });
 
 metroBtn.addEventListener('click', () => {
   clock.setMetronome(!clock.metronome);
   syncTransportUI();
+  scheduleSave();
 });
 
 function nudgeBpm(delta) {
   clock.setBpm(clock.bpm + delta);
   bpmVal.textContent = String(clock.bpm);
+  scheduleSave();
 }
 document.getElementById('bpmUp').addEventListener('click', (e) => nudgeBpm(e.shiftKey ? 5 : 1));
 document.getElementById('bpmDown').addEventListener('click', (e) => nudgeBpm(e.shiftKey ? -5 : -1));
@@ -421,8 +725,12 @@ function markAudioOn(on) {
 async function ensureAudio() {
   if (!engine.ctx) {
     gate.classList.add('hidden');
-    await engine.init();
-    markAudioOn(engine.ctx.state === 'running');
+    try {
+      await engine.init();
+      markAudioOn(engine.ctx.state === 'running');
+    } catch (err) {
+      toast('Audio konnte nicht gestartet werden: ' + err.message, 'warn');
+    }
     return;
   }
   if (engine.ctx.state !== 'running') {
@@ -461,39 +769,55 @@ PRESETS.forEach((p, i) => {
   opt.textContent = p.name;
   select.appendChild(opt);
 });
-select.value = '0';
+const customOption = document.createElement('option');
+customOption.value = '-1';
+customOption.textContent = 'Custom';
+select.appendChild(customOption);
+
+function syncPresetSelect() {
+  const track = activeTrack();
+  const index = track ? PRESETS.findIndex((p) => p.name === track.patchName) : 0;
+  select.value = String(index >= 0 ? index : -1);
+}
 
 function refreshUI() {
-  knobs.forEach(({ path, knob }) => knob.set(getPath(path), true));
-  segs.forEach(({ path, seg }) => seg.set(getPath(path)));
-  wheel.set(state.modWheel);
+  knobs.forEach(({ path, knob }) => knob.set(getIn(getPatch(), path), true));
+  segs.forEach(({ path, seg }) => seg.set(getIn(getPatch(), path)));
+  masterKnob.set(project.master, true);
+  wheel.set(project.modWheel);
   matrix.refresh();
+  syncPresetSelect();
   updateOctaveLabel();
+  projectNameInput.value = project.name;
 }
 
 select.addEventListener('change', () => {
   const index = Number(select.value);
   const preset = PRESETS[index];
-  if (!preset) return;
+  const track = activeTrack();
+  if (!preset || !track) return;
   clock.panic();
-  const prevMaster = state.master;
-  const prevWheel = state.modWheel;
-  const patch = buildPatch(preset.patch);
-  Object.assign(state, patch);
-  state.master = prevMaster;
-  state.modWheel = prevWheel;
+  track.patch = buildPatch(preset.patch);
+  track.patchName = preset.name;
   refreshUI();
-  engine.refreshVoices();
+  engine.refreshVoices(track.id);
+  trackList.build();
+  scheduleSave();
+  toast(`Patch „${preset.name}" auf ${track.name}`, 'ok');
 });
 
 /* ------------------------------------------------------------- Matrix-Aktionen */
 
 document.getElementById('clearBtn').addEventListener('click', () => {
-  state.matrix = {};
+  const patch = getPatch();
+  if (patch) patch.matrix = {};
   matrix.refresh();
+  scheduleSave();
 });
 
 document.getElementById('randBtn').addEventListener('click', () => {
+  const patch = getPatch();
+  if (!patch) return;
   const rnd = mulberry32((Date.now() ^ (Math.random() * 1e9)) >>> 0);
   const next = {};
   for (const s of SOURCES) {
@@ -504,8 +828,9 @@ document.getElementById('randBtn').addEventListener('click', () => {
       }
     }
   }
-  state.matrix = next;
+  patch.matrix = next;
   matrix.refresh();
+  scheduleSave();
 });
 
 document.getElementById('panicBtn').addEventListener('click', () => {
@@ -516,26 +841,42 @@ document.getElementById('panicBtn').addEventListener('click', () => {
 
 /* ------------------------------------------------------------------ Loop */
 
+const raf =
+  typeof requestAnimationFrame === 'function'
+    ? (cb) => requestAnimationFrame(cb)
+    : (cb) => setTimeout(() => cb(0), 16);
+
 let frame = 0;
 function loop() {
-  requestAnimationFrame(loop);
+  raf(loop);
   scope.draw();
   lfo1Preview.draw();
   lfo2Preview.draw();
   strip.draw();
   if ((frame++ & 1) === 0) {
-    matrix.setActivity(engine.srcSnapshot, engine.lastSums);
+    const activity = engine.activity.get(project.activeTrackId);
+    if (activity) matrix.setActivity(activity.src, activity.sums);
     const p = clock.position();
     posDisplay.textContent = p.counting ? '·' + p.countdown : `${p.bar}.${p.beat}.${p.sixteenth}`;
     loopProgress.style.width = (p.running ? p.phase * 100 : 0).toFixed(1) + '%';
   }
 }
-requestAnimationFrame(loop);
+raf(loop);
 
 /* ------------------------------------------------------------------ Start */
 
 refreshUI();
+trackList.build();
 syncTransportUI();
+if (restored.ok) {
+  setSaveState(`wiederhergestellt ${new Date().toLocaleTimeString('de-DE')}`, 'ok');
+} else if (restored.errors && restored.errors.length && !restored.empty) {
+  toast('Gespeichertes Projekt verworfen: ' + restored.errors[0], 'warn');
+  setSaveState('kein Projekt geladen', 'err');
+} else {
+  setSaveState('Autosave bereit');
+}
+
 setTimeout(() => {
   scope.resize();
   strip.resize();
@@ -546,7 +887,14 @@ window.addEventListener('load', () => {
   lfo2Preview.resize();
   strip.resize();
 });
+window.addEventListener('beforeunload', () => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  saveNow();
+});
 
-console.info('%cSONIC DSP', 'color:#ffb245;font-weight:700', '— Modulation Matrix + Loop Recorder bereit.');
+console.info('%cSONIC DSP', 'color:#ffb245;font-weight:700', '— Projekt, Spuren und MIDI bereit.');
 
-export { state, engine, clock, clip };
+export { project, engine, clock };

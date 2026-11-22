@@ -2,7 +2,7 @@
  * Knobs, Segment-Schalter, Mod-Wheel, Modulationsmatrix, Keyboard, Scope.
  */
 
-import { SOURCES, DESTS, clamp, state } from './state.js';
+import { SOURCES, DESTS, clamp } from './state.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const KNOB_ARC = 'M 11.272 36.728 A 18 18 0 1 1 36.728 36.728';
@@ -299,7 +299,7 @@ export function createWheel(root, { value = 0, onChange }) {
 
 /* ------------------------------------------------------- Modulationsmatrix */
 
-export function createMatrix(root, { onChange }) {
+export function createMatrix(root, { getPatch, onChange }) {
   root.innerHTML = '';
   const grid = document.createElement('div');
   grid.className = 'mx';
@@ -373,7 +373,8 @@ export function createMatrix(root, { onChange }) {
       cells.push(cellRef);
 
       const readAmount = () => {
-        const a = state.matrix[key];
+        const patch = getPatch();
+        const a = patch && patch.matrix ? patch.matrix[key] : 0;
         return typeof a === 'number' ? a : 0;
       };
 
@@ -396,7 +397,8 @@ export function createMatrix(root, { onChange }) {
 
       const write = (a) => {
         const nv = clamp(Math.round(a), -100, 100);
-        state.matrix[key] = nv;
+        const patch = getPatch();
+        if (patch) patch.matrix[key] = nv;
         paint();
         if (onChange) onChange(key, nv);
       };
@@ -478,8 +480,9 @@ export function createMatrix(root, { onChange }) {
     },
     setActivity(src, sums) {
       if (!src) return;
+      const patch = getPatch();
       for (const c of cells) {
-        const a = state.matrix[c.key] || 0;
+        const a = (patch && patch.matrix[c.key]) || 0;
         if (!a) {
           if (c.glow.style.opacity !== '0') c.glow.style.opacity = '0';
           continue;
@@ -755,12 +758,13 @@ const shapeAt = (shape, p) => {
 };
 
 export class LfoPreview {
-  constructor(canvas, engine, which, color) {
+  constructor(canvas, engine, which, color, getPatch) {
     this.canvas = canvas;
     this.g = canvas.getContext('2d');
     this.engine = engine;
     this.which = which;
     this.color = color;
+    this.getPatch = getPatch || (() => null);
     this.w = 1;
     this.h = 1;
     this.dpr = 1;
@@ -787,7 +791,8 @@ export class LfoPreview {
     const w = this.w;
     const h = this.h;
     const is1 = this.which === 'lfo1';
-    const shape = is1 ? state.lfo1.shape : state.lfo2.shape;
+    const patch = this.getPatch();
+    const shape = is1 ? (patch ? patch.lfo1.shape : 'sine') : (patch ? patch.lfo2.shape : 'tri');
     const phase = is1 ? this.engine.lfo1.phase : this.engine.lfo2.phase;
     const rate = is1 ? this.engine.lfoRate.lfo1 : this.engine.lfoRate.lfo2;
 
@@ -924,11 +929,11 @@ export function createSlider(parent, { label = '', min = 0, max = 1, value = 0, 
 const TAKE_COLORS = ['#ffb245', '#54d7c7', '#a98bff', '#7bd88f', '#ff7a9c', '#8ab4ff'];
 
 export class ClipStrip {
-  constructor(canvas, { clock, clip, badgeEl }) {
+  constructor(canvas, { clock, getClip, badgeEl }) {
     this.canvas = canvas;
     this.g = canvas.getContext('2d');
     this.clock = clock;
-    this.clip = clip;
+    this.getClip = getClip;
     this.badgeEl = badgeEl;
     this._badge = '';
     this.dpr = 1;
@@ -974,7 +979,8 @@ export class ClipStrip {
       g.stroke();
     }
 
-    const events = this.clip.events;
+    const clip = this.getClip();
+    const events = clip ? clip.events : [];
     const loopTicks = clock.loopTicks;
 
     if (!events.length) {
@@ -999,7 +1005,7 @@ export class ClipStrip {
       const padY = 4;
       const noteH = Math.max(2, Math.min(6, (h - padY * 2) / (hi - lo)));
       const takeIndex = new Map();
-      this.clip.takes.forEach((t, i) => takeIndex.set(t.id, i));
+      clip.takes.forEach((t, i) => takeIndex.set(t.id, i));
 
       for (const ev of events) {
         const x = (ev.tick / loopTicks) * w;
@@ -1047,15 +1053,167 @@ export class ClipStrip {
 
     /* Badge */
     if (this.badgeEl) {
+      const noteCount = clip ? clip.count : 0;
+      const takeCount = clip ? clip.takeCount : 0;
       const text = clock.running
         ? pos.counting
           ? `COUNT-IN ${pos.countdown} · ${bars} Bars`
-          : `${bars} Bars · ${this.clip.count} Noten · ${this.clip.takeCount} Takes`
-        : `${bars} Bars · ${this.clip.count} Noten${this.clip.takeCount ? ` · ${this.clip.takeCount} Takes` : ' · leer'}`;
+          : `${bars} Bars · ${noteCount} Noten · ${takeCount} Takes`
+        : `${bars} Bars · ${noteCount} Noten${takeCount ? ` · ${takeCount} Takes` : ' · leer'}`;
       if (text !== this._badge) {
         this._badge = text;
         this.badgeEl.textContent = text;
       }
     }
   }
+}
+
+/* --------------------------------------------------------------- Spur-Liste */
+
+/**
+ * Spurenliste: Auswahl, Mute/Solo, Pegel, Umbenennen, Löschen (zweistufig).
+ * Die Liste wird bei jeder Änderung neu aufgebaut – bei max. 8 Spuren günstig
+ * und ohne inkrementelle Zustandssynchronisation.
+ */
+export function createTrackList(root, { getTracks, getActiveId, onSelect, onMute, onSolo, onGain, onRename, onDelete }) {
+  const list = document.createElement('div');
+  list.className = 'tracks';
+  root.appendChild(list);
+
+  let pendingDeleteId = null;
+  let pendingTimer = null;
+
+  function clearPending() {
+    pendingDeleteId = null;
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+  }
+
+  function build() {
+    clearPending();
+    list.innerHTML = '';
+    const tracks = getTracks();
+    const activeId = getActiveId();
+
+    tracks.forEach((track, index) => {
+      const row = document.createElement('div');
+      row.className = 'track-row' + (track.id === activeId ? ' active' : '');
+      row.dataset.id = track.id;
+      row.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button, input')) return;
+        onSelect(track.id);
+      });
+
+      const idx = document.createElement('span');
+      idx.className = 'track-index';
+      idx.textContent = String(index + 1).padStart(2, '0');
+
+      const name = document.createElement('button');
+      name.type = 'button';
+      name.className = 'track-name';
+      name.textContent = track.name;
+      name.title = 'Doppelklick zum Umbenennen';
+      name.addEventListener('dblclick', () => startRename(row, track, name));
+
+      const patchName = document.createElement('span');
+      patchName.className = 'track-patch';
+      patchName.textContent = track.patchName || 'Init';
+
+      const notes = document.createElement('span');
+      notes.className = 'track-notes';
+      const count = track.clip ? track.clip.count : 0;
+      notes.textContent = count ? `${count} ♪` : '–';
+
+      const mute = document.createElement('button');
+      mute.type = 'button';
+      mute.className = 'track-btn mute' + (track.mute ? ' on' : '');
+      mute.textContent = 'M';
+      mute.title = 'Mute';
+      mute.setAttribute('aria-pressed', String(!!track.mute));
+      mute.addEventListener('click', () => onMute(track.id));
+
+      const solo = document.createElement('button');
+      solo.type = 'button';
+      solo.className = 'track-btn solo' + (track.solo ? ' on' : '');
+      solo.textContent = 'S';
+      solo.title = 'Solo';
+      solo.setAttribute('aria-pressed', String(!!track.solo));
+      solo.addEventListener('click', () => onSolo(track.id));
+
+      const gainWrap = document.createElement('div');
+      gainWrap.className = 'track-gain';
+      const gain = document.createElement('input');
+      gain.type = 'range';
+      gain.min = '0';
+      gain.max = '1.5';
+      gain.step = '0.01';
+      gain.value = String(track.gain);
+      gain.title = 'Spurpegel';
+      gain.setAttribute('aria-label', `Pegel ${track.name}`);
+      gain.addEventListener('input', () => onGain(track.id, Number(gain.value)));
+      gainWrap.appendChild(gain);
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'track-btn del';
+      del.textContent = '×';
+      del.title = 'Spur löschen (zweimal klicken)';
+      del.addEventListener('click', () => {
+        if (getTracks().length <= 1) {
+          del.classList.add('shake');
+          setTimeout(() => del.classList.remove('shake'), 400);
+          return;
+        }
+        if (pendingDeleteId === track.id) {
+          clearPending();
+          onDelete(track.id);
+          return;
+        }
+        clearPending();
+        pendingDeleteId = track.id;
+        del.classList.add('confirm');
+        del.textContent = '?';
+        pendingTimer = setTimeout(() => {
+          pendingDeleteId = null;
+          pendingTimer = null;
+          del.classList.remove('confirm');
+          del.textContent = '×';
+        }, 2500);
+      });
+
+      row.append(idx, name, patchName, notes, mute, solo, gainWrap, del);
+      list.appendChild(row);
+    });
+  }
+
+  function startRename(row, track, button) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'track-name-input';
+    input.value = track.name;
+    input.maxLength = 24;
+    button.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const commit = (cancel = false) => {
+      if (done) return;
+      done = true;
+      const value = input.value.trim();
+      if (!cancel && value) onRename(track.id, value.slice(0, 24));
+      else build();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') commit(false);
+      if (e.key === 'Escape') commit(true);
+      e.stopPropagation();
+    });
+    input.addEventListener('blur', () => commit(false));
+  }
+
+  build();
+  return { build, el: list };
 }

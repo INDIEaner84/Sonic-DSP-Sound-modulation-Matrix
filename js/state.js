@@ -1,5 +1,7 @@
-/* Sonic DSP — Modulation Matrix
- * Globaler Patch-State, Konstanten und Werkspresets.
+/* Sonic DSP — Patch-Modell
+ * Ein Patch beschreibt nur den Klang (Oszillatoren, Filter, Hüllkurven, LFOs,
+ * Modulationsmatrix). Projektweite Werte (Master, Mod-Wheel, Tempo) liegen im
+ * Projekt (js/project.js), damit Patches frei zwischen Spuren wandern können.
  */
 
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -45,10 +47,39 @@ export const FILTER_TYPES = [
   { v: 'highpass', label: 'HP' },
 ];
 
+/** Erlaubte Wertebereiche je Patch-Pfad (auch für die Import-Validierung). */
+export const PATCH_RANGES = {
+  'osc1.level': [0, 1],
+  'osc1.octave': [-2, 2],
+  'osc1.detune': [-50, 50],
+  'osc2.level': [0, 1],
+  'osc2.octave': [-2, 2],
+  'osc2.detune': [-50, 50],
+  'filter.cutoff': [40, 14000],
+  'filter.reso': [0.3, 24],
+  'ampEnv.a': [0.001, 4],
+  'ampEnv.d': [0.001, 4],
+  'ampEnv.s': [0, 1],
+  'ampEnv.r': [0.005, 6],
+  'modEnv.a': [0.001, 4],
+  'modEnv.d': [0.001, 4],
+  'modEnv.s': [0, 1],
+  'modEnv.r': [0.005, 6],
+  'lfo1.rate': [0.05, 24],
+  'lfo2.rate': [0.02, 24],
+  glide: [0, 0.5],
+};
+
+export const PATCH_ENUMS = {
+  'osc1.wave': WAVES.map((w) => w.v),
+  'osc2.wave': WAVES.map((w) => w.v),
+  'filter.type': FILTER_TYPES.map((f) => f.v),
+  'lfo1.shape': LFO_SHAPES.map((s) => s.v),
+  'lfo2.shape': LFO_SHAPES.map((s) => s.v),
+};
+
 export const DEFAULT_PATCH = {
-  master: 0.72,
   glide: 0.02,
-  modWheel: 0,
   osc1: { wave: 'sawtooth', octave: 0, detune: 0, level: 0.55 },
   osc2: { wave: 'square', octave: -1, detune: 8, level: 0.32 },
   filter: { type: 'lowpass', cutoff: 900, reso: 4 },
@@ -66,6 +97,7 @@ export const DEFAULT_PATCH = {
   },
 };
 
+/** Baut einen vollständigen Patch aus Default + Overrides (tief, ohne Mutation). */
 export function buildPatch(overrides) {
   const p = structuredClone(DEFAULT_PATCH);
   if (!overrides) return p;
@@ -82,18 +114,18 @@ export function buildPatch(overrides) {
   return p;
 }
 
-/** Der von Engine und UI gemeinsam genutzte Live-Patch. */
-export const state = buildPatch();
+/* ------------------------------------------------------------- Pfad-Helfer */
 
-export function getPath(path) {
-  return path.split('.').reduce((o, k) => (o == null ? o : o[k]), state);
+export function getIn(obj, path) {
+  return path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
 }
 
-export function setPath(path, value) {
+export function setIn(obj, path, value) {
   const parts = path.split('.');
   const last = parts.pop();
-  const target = parts.reduce((o, k) => o[k], state);
+  const target = parts.reduce((o, k) => o[k], obj);
   target[last] = value;
+  return obj;
 }
 
 export function mulberry32(seed) {

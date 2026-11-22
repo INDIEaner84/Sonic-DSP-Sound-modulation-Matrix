@@ -3,6 +3,9 @@
  * Aufnahme erfolgt in „Takes" – ein Take = ein Durchgang, Undo entfernt den letzten.
  */
 
+let takeSeq = 0;
+const nextTakeId = () => `t${Date.now().toString(36)}-${(takeSeq++).toString(36)}`;
+
 export class Clip {
   constructor() {
     this.takes = [];
@@ -32,7 +35,7 @@ export class Clip {
 
   beginTake() {
     this.closeOpen(null);
-    this._take = { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, events: [] };
+    this._take = { id: nextTakeId(), events: [] };
     this.takes.push(this._take);
     return this._take;
   }
@@ -85,6 +88,34 @@ export class Clip {
     this.takes = [];
     this._open.clear();
     this._take = null;
+  }
+
+  /** Import: Events als ein Take übernehmen. */
+  addEvents(events) {
+    if (!events || !events.length) return null;
+    const take = { id: nextTakeId(), events: [] };
+    for (const e of events) {
+      take.events.push({ tick: e.tick, dur: e.dur, note: e.note, vel: e.vel, take: take.id });
+    }
+    this.takes.push(take);
+    return take;
+  }
+
+  /** Serialisierung: pro Take ein Array aus schlichten Event-Objekten. */
+  toTakes() {
+    return this.takes.map((take) =>
+      take.events.map((ev) => ({ tick: ev.tick, dur: ev.dur, note: ev.note, vel: ev.vel }))
+    );
+  }
+
+  static fromTakes(takes) {
+    const clip = new Clip();
+    if (!Array.isArray(takes)) return clip;
+    for (const events of takes) {
+      if (!Array.isArray(events) || !events.length) continue;
+      clip.addEvents(events);
+    }
+    return clip;
   }
 
   /** Events eines Zeitfensters – inkl. Swing-Verschiebung. */

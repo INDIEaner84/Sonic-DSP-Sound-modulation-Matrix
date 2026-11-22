@@ -160,6 +160,43 @@
 
         <!-- --------------------------------------------------------- mitte -->
         <div class="col col-mid">
+          <section class="panel panel-tracks">
+            <div class="panel-head">
+              <h2>Tracks</h2>
+              <div class="panel-actions">
+                <span class="tag" id="trackTag">1 / 8</span>
+                <button class="btn ghost" id="addTrackBtn" type="button">+ Track</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="tracks"></div>
+              <div class="project-bar">
+                <input
+                  id="projectName"
+                  class="proj-name"
+                  type="text"
+                  maxlength="40"
+                  aria-label="Projektname"
+                  placeholder="Projektname"
+                />
+                <div class="proj-actions">
+                  <button class="btn ghost" id="saveBtn" type="button" title="Projekt als JSON herunterladen">Save JSON</button>
+                  <button class="btn ghost" id="loadBtn" type="button" title="Projekt aus JSON laden">Load</button>
+                  <button class="btn ghost" id="newBtn" type="button" title="Neues Projekt">New</button>
+                  <span class="proj-sep" aria-hidden="true"></span>
+                  <button class="btn ghost" id="midiExportBtn" type="button" title="Als MIDI-Datei exportieren">MIDI ⤓</button>
+                  <select id="midiRepeats" class="mini-select" aria-label="Loop-Wiederholungen im MIDI-Export">
+                    <option value="1">1×</option>
+                    <option value="2">2×</option>
+                    <option value="4">4×</option>
+                  </select>
+                  <button class="btn ghost" id="midiImportBtn" type="button" title="MIDI-Datei importieren">MIDI ⤒</button>
+                </div>
+                <span class="save-state" id="saveState">Autosave</span>
+              </div>
+            </div>
+          </section>
+
           <section class="panel panel-matrix">
             <div class="panel-head">
               <h2>Modulation Matrix</h2>
@@ -244,12 +281,16 @@
               <span id="octLabel">C3 – B4</span>
               <button class="btn oct" id="octUp" type="button" aria-label="Oktave höher">+</button>
             </div>
-            <p class="hint">Rechner-Tasten: A W S E D F T G Y H U J K · Z / X = Oktave<br />REC drücken und drüberspielen = Overdub</p>
+            <p class="hint">Rechner-Tasten: A W S E D F T G Y H U J K · Z / X = Oktave<br />REC drücken und drüberspielen = Overdub auf der aktiven Spur</p>
           </div>
           <div class="keys" id="keys"></div>
         </div>
       </footer>
     </div>
+
+    <input type="file" id="fileInput" accept=".json,application/json" hidden />
+    <input type="file" id="midiInput" accept=".mid,.midi,audio/midi" hidden />
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <div class="gate" id="gate">
       <div class="gate-card">
