@@ -83,3 +83,86 @@ test('blobToWav meldet Fehlerfälle', async () => {
   );
   assert(!empty.ok && empty.error.includes('leer'), empty.error);
 });
+
+/* ------------------------------------------------- Mitschnitt mit Fake-Recorder */
+
+class FakeMediaRecorder {
+  static isTypeSupported(type) {
+    return type.includes('webm');
+  }
+  constructor(stream, options = {}) {
+    this.stream = stream;
+    this.mimeType = options.mimeType || 'audio/webm';
+    this.state = 'inactive';
+    this.chunks = [new Blob([new Uint8Array([1, 2, 3, 4])], { type: this.mimeType })];
+    FakeMediaRecorder.last = this;
+  }
+  start(timeslice) {
+    this.state = 'recording';
+    this.timeslice = timeslice;
+    setTimeout(() => {
+      if (this.ondataavailable) this.chunks.forEach((chunk) => this.ondataavailable({ data: chunk }));
+    }, 5);
+  }
+  stop() {
+    this.state = 'inactive';
+    setTimeout(() => {
+      if (this.onstop) this.onstop();
+    }, 5);
+  }
+}
+
+function fakeRecordCtx() {
+  return {
+    createMediaStreamDestination: () => ({ stream: { id: 'fake' } }),
+    createGain: () => ({ connect() {}, disconnect() {} }),
+  };
+}
+
+test('recordOutput nimmt auf und liefert einen Blob', async () => {
+  const previous = globalThis.MediaRecorder;
+  globalThis.MediaRecorder = FakeMediaRecorder;
+  try {
+    const ctx = fakeRecordCtx();
+    const source = { connect() {}, disconnect() {} };
+    let progress = 0;
+    const result = await recordOutput(ctx, source, 0.12, { onProgress: (p) => { progress = p; } });
+    assert(result.ok, result.error);
+    eq(result.mimeType, 'audio/webm;codecs=opus');
+    assert(result.blob.size > 0, 'Blob ist leer');
+    assert(progress > 0, 'kein Fortschritt gemeldet');
+    eq(FakeMediaRecorder.last.state, 'inactive', 'Recorder nicht gestoppt');
+  } finally {
+    globalThis.MediaRecorder = previous;
+  }
+});
+
+test('recordOutput bricht auf Signal ab', async () => {
+  const previous = globalThis.MediaRecorder;
+  globalThis.MediaRecorder = FakeMediaRecorder;
+  try {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 30);
+    const result = await recordOutput(fakeRecordCtx(), { connect() {}, disconnect() {} }, 3, {
+      signal: controller.signal,
+    });
+    assert(!result.ok);
+    assert(result.error.includes('abgebrochen'), result.error);
+  } finally {
+    globalThis.MediaRecorder = previous;
+  }
+});
+
+test('recordOutput meldet ungültige Dauer und fehlende Quelle', async () => {
+  const previous = globalThis.MediaRecorder;
+  globalThis.MediaRecorder = FakeMediaRecorder;
+  try {
+    eq((await recordOutput(fakeRecordCtx(), null, 1)).ok, false);
+    eq((await recordOutput(fakeRecordCtx(), { connect() {} }, 0)).ok, false);
+    eq((await recordOutput(fakeRecordCtx(), { connect() {} }, NaN)).ok, false);
+    eq(canRecord(fakeRecordCtx()), true);
+    eq(pickMimeType(), 'audio/webm;codecs=opus');
+  } finally {
+    globalThis.MediaRecorder = previous;
+  }
+});

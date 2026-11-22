@@ -51,7 +51,7 @@ Der Nutzer will „andere Sounds" und musikalisches Ergebnis. Welle 2/3 liefern 
 
 | Paket | Ergebnis |
 | --- | --- |
-| P4.1–P4.5 | umgesetzt; `npm test` 96/96, `npm run test:ui` 115/115 |
+| P4.1–P4.5 | umgesetzt; `npm test` 100/100, `npm run test:ui` 119/119 |
 | P5.1 | umgesetzt; WAV-Encoder sechs Tests (Header, Stereo, Clamping, Fehlerfälle) |
 | P5.2 | umgesetzt; Encoder-/Fehlerpfade getestet, Browser-Mitschnitt offen (manuell) |
 | P5.3 | umgesetzt; UI-Fehlerpfad getestet |

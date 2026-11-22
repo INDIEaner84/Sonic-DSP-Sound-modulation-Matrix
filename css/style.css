@@ -1500,6 +1500,9 @@ body.is-recording .loop-progress i {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: 42vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .track-row {

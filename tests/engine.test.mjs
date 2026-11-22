@@ -254,3 +254,20 @@ test('Presets der Bibliothek sind gültig und nutzen erlaubte Wellen', async () 
     }
   }
 });
+
+test('FX-Parameter werden nur bei Änderung geschrieben', async () => {
+  const { engine, ctx, project } = await setup();
+  ctx.advance(0.02);
+  engine.tick();
+  const writes = engine.delay.delayTime.writes;
+  ctx.advance(0.02);
+  engine.tick();
+  ctx.advance(0.02);
+  engine.tick();
+  eq(engine.delay.delayTime.writes, writes, 'kein Schreiben ohne Änderung');
+  project.fx.delayDivision = '1/2';
+  ctx.advance(0.02);
+  engine.tick();
+  eq(engine.delay.delayTime.writes, writes + 1, 'genau ein Schreiben nach Änderung');
+  near(engine.delay.delayTime.value, 1, 1e-6, '1/2 bei 120 BPM');
+});

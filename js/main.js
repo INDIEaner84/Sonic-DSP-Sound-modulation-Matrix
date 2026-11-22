@@ -653,7 +653,7 @@ async function bounceMix() {
     return;
   }
   downloadBlob(wav.blob, safeFilename(`${project.name}-mix`, 'wav'));
-  toast(`Mix als WAV gespeichert (${seconds.toFixed(1)} s)`, 'ok');
+  toast(`Mix als WAV gespeichert (${seconds.toFixed(1)} s) · Transport gestoppt`, 'ok');
 }
 
 if (bounceBtn) bounceBtn.addEventListener('click', bounceMix);

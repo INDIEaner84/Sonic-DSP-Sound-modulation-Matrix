@@ -488,6 +488,10 @@ export class Engine {
     if (!this.ctx || !this.project || !this.delay) return;
     const fx = { ...FX_DEFAULTS, ...(this.project.fx || {}) };
     const time = delaySeconds({ bpm: this.project.bpm, fx });
+    /* Nur schreiben, wenn sich etwas geändert hat – spart AudioParam-Verkehr im 60-Hz-Takt. */
+    const key = `${time}|${fx.delayFeedback}|${fx.delayTone}|${fx.reverbSize}|${fx.reverbDamp}`;
+    if (key === this._fxKey) return;
+    this._fxKey = key;
     this.delay.delayTime.setTargetAtTime(clamp(time, 0.01, 1.9), now, 0.05);
     this.delayFb.gain.setTargetAtTime(clamp(fx.delayFeedback, 0, 0.85), now, 0.05);
     this.delayTone.frequency.setTargetAtTime(clamp(fx.delayTone, 300, 9000), now, 0.05);
