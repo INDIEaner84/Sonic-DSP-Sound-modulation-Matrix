@@ -37,6 +37,7 @@ import {
   DELAY_DIVISIONS,
 } from './project.js';
 import { encodeProject, decodeToProject, defaultImportPatches } from './midi-io.js';
+import { mixSeconds, canRecord, recordOutput, blobToWav } from './recorder.js';
 import {
   createKnob,
   createSeg,
@@ -598,6 +599,64 @@ function replaceProject(next) {
 }
 
 document.getElementById('saveBtn').addEventListener('click', downloadJson);
+
+/* --------------------------------------------------------------- Mix-Mitschnitt */
+
+const bounceBtn = document.getElementById('bounceBtn');
+const bounceLoops = document.getElementById('bounceLoops');
+let bouncing = false;
+
+async function bounceMix() {
+  if (bouncing) return;
+  if (!engine.ctx) {
+    toast('Erst „AUDIO STARTEN" – der Mitschnitt braucht laufendes Audio', 'warn');
+    return;
+  }
+  if (!canRecord(engine.ctx)) {
+    toast('Mitschnitt wird von diesem Browser nicht unterstützt', 'warn');
+    return;
+  }
+  const loops = clamp(Number(bounceLoops && bounceLoops.value) || 1, 1, 8);
+  const seconds = mixSeconds(project, loops);
+  bouncing = true;
+  const label = bounceBtn ? bounceBtn.textContent : '';
+  if (bounceBtn) bounceBtn.disabled = true;
+
+  clock.stop();
+  clock.panic();
+  clock.start();
+
+  let result;
+  try {
+    result = await recordOutput(engine.ctx, engine.analyser, seconds, {
+      onProgress: (p) => {
+        if (bounceBtn) bounceBtn.textContent = `rec ${Math.round(p * 100)} %`;
+      },
+    });
+  } finally {
+    clock.stop();
+    if (bounceBtn) {
+      bounceBtn.disabled = false;
+      bounceBtn.textContent = label || 'Mix ⤓ WAV';
+    }
+    bouncing = false;
+  }
+
+  if (!result || !result.ok) {
+    toast('Mitschnitt fehlgeschlagen: ' + ((result && result.error) || 'unbekannt'), 'err');
+    return;
+  }
+
+  const wav = await blobToWav(engine.ctx, result.blob);
+  if (!wav.ok) {
+    toast('WAV-Export fehlgeschlagen: ' + wav.error, 'err');
+    return;
+  }
+  downloadBlob(wav.blob, safeFilename(`${project.name}-mix`, 'wav'));
+  toast(`Mix als WAV gespeichert (${seconds.toFixed(1)} s)`, 'ok');
+}
+
+if (bounceBtn) bounceBtn.addEventListener('click', bounceMix);
 
 const fileInput = document.getElementById('fileInput');
 document.getElementById('loadBtn').addEventListener('click', () => fileInput.click());

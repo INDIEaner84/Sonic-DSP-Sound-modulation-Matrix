@@ -46,3 +46,16 @@ Der Nutzer will „andere Sounds" und musikalisches Ergebnis. Welle 2/3 liefern 
   Spuren oder MIDI zu berühren (Sends auf 0).
 - Der Mitschnitt (P5.2) ist der einzige Teil, der im Browser manuell geprüft werden muss;
   er ist von der Engine getrennt und kann ohne Folgen für Aufnahme/Export entfernt werden.
+
+## Ergebnis (Stand nach Umsetzung)
+
+| Paket | Ergebnis |
+| --- | --- |
+| P4.1–P4.5 | umgesetzt; `npm test` 96/96, `npm run test:ui` 115/115 |
+| P5.1 | umgesetzt; WAV-Encoder sechs Tests (Header, Stereo, Clamping, Fehlerfälle) |
+| P5.2 | umgesetzt; Encoder-/Fehlerpfade getestet, Browser-Mitschnitt offen (manuell) |
+| P5.3 | umgesetzt; UI-Fehlerpfad getestet |
+
+Abweichungen vom Plan: Die Sends liegen post-fader (Mute/Solo erfasst sie), und der
+Mitschnitt ist ein Echtzeit-Mitschnitt der echten Kette statt eines Offline-Renderings —
+Begründung in `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`, E-12 und E-15.

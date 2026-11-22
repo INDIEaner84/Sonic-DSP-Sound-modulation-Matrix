@@ -31,13 +31,17 @@ export function near(actual, expected, tolerance, message) {
 }
 
 export function throws(fn, message) {
-  let threw = false;
+  let error = null;
   try {
     fn();
   } catch (e) {
-    threw = true;
+    error = e;
   }
-  if (!threw) throw new Error(message || 'Fehler erwartet, keiner geworfen');
+  if (!error) throw new Error(typeof message === 'string' ? message : 'Fehler erwartet, keiner geworfen');
+  if (message instanceof RegExp && !message.test(error.message)) {
+    throw new Error(`Fehlermeldung passt nicht: "${error.message}"`);
+  }
+  return error;
 }
 
 export async function run() {

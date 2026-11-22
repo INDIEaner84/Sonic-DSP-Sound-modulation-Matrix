@@ -1,6 +1,6 @@
 <div align="center">
   <h1>SONIC DSP — Modulation Matrix</h1>
-  <p>Polyphoner Web-Audio-Synthesizer mit Modulationsmatrix, Loop-Recorder, Spuren und MIDI-Import/Export.</p>
+  <p>Polyphoner Web-Audio-Synthesizer mit Modulationsmatrix, Loop-Recorder, Spuren, Effekten, MIDI-Import/Export und WAV-Mitschnitt.</p>
 </div>
 
 ## Was ist das?
@@ -14,6 +14,11 @@ Dazu ein **Loop-Recorder mit Transport**: Metronom, Count-in, Quantize, Swing, O
 Takes und Undo. Aufgenommen werden MIDI-Events (Note/Zeit/Velocity/Dauer), kein Audio —
 damit bleibt alles editierbar, als JSON speicherbar und als Standard-MIDI-Datei
 exportierbar.
+
+Ein **Delay- und ein Reverb-Bus** liegen hinter den Spuren; jede Spur hat eigene Sends.
+Die Reverb-Impulsantwort wird im Browser erzeugt (kein Sample-Download, keine Assets).
+Für Percussion gibt es die Wellenform `NOISE`; fertige Mixe lassen sich in Echtzeit
+aufnehmen und als WAV speichern.
 
 **Quellen:** LFO 1 · LFO 2 · ENV 2 · Velocity · Mod-Wheel · Key-Track
 **Ziele:** Pitch 1 · Pitch 2 · Level 1 · Level 2 · Cutoff · Resonanz · Pan · LFO-1-Rate
@@ -86,6 +91,7 @@ zeigt die Noten farbig pro Take und den Playhead.
 | **Neu** | leeres Projekt (mit Rückfrage) |
 | **MIDI Export** | Standard-MIDI-Datei (Format 1), Wiederholungen 1–16 wählbar |
 | **MIDI Import** | MIDI-Datei als Projekt übernehmen (max. 8 Spuren) |
+| **Mix ⤓ WAV** | nimmt die laufende Ausgabe in Echtzeit auf (1/2/4 Loops + Ausklang) und speichert sie als WAV |
 
 Autosave: jede Änderung wird nach 700 ms in `localStorage` geschrieben
 (`sonicdsp.project.v1`) und beim nächsten Start automatisch geladen (Statusanzeige neben
@@ -93,7 +99,23 @@ dem Projektnamen); beim Schließen wird zusätzlich sofort gespeichert. Ein kapu
 Autosave-Stand wird verworfen und als Toast gemeldet, nicht übernommen. Fehler landen
 generell als Toast unten mittig im Bild.
 
-Presets: Init Lead, Wobble Bass, Pluck Lead, Drift Pad, Res Sweep FX.
+Preset-Auswahl wirkt immer auf die **aktive Spur**:
+Init Lead, Wobble Bass, Pluck Lead, Drift Pad, Res Sweep FX, Sub Bass, Noise Hat, Glass Bell.
+
+### Effekte (FX-Feld im Tracks-Panel)
+
+| Element | Wirkung |
+| --- | --- |
+| **DLY / REV** in der Spurzeile | Send-Anteil dieser Spur (post-fader, also von Mute/Solo erfasst) |
+| **DELAY** (Auswahl) | Raster der Delay-Zeit: 1/16 … 1/2, folgt dem Tempo |
+| **FEEDBACK** | Rückkopplung des Delays (0–85 %, höher = riskanter) |
+| **TONE** | Tiefpass im Delay-Rückweg (300 Hz … 9 kHz) |
+| **REVERB** | Größe der Impulsantwort (0,3 … 8 s) |
+| **DAMP** | Dämpfung des Reverb-Rückwegs |
+
+Die Sends liegen hinter dem Fader: ein stumm geschalteter Kanal läuft nicht in die Effekte.
+Ein Wechsel der Wellenform wirkt nur auf neu startende Noten; laufende Rausch-Stimmen
+behalten ihre Quelle bis zum Ende der Note.
 
 ## Aufbau
 
@@ -106,6 +128,8 @@ js/clip.js          Loop-Inhalt als Noten-Events, Takes, Undo
 js/midi-io.js       SMF-Encoder/Decoder (Format 0/1), ohne Dependencies
 js/audio.js         Audio-Engine: Spuren-Ketten, Voices, ADSR, LFOs, Matrix, Metronom
 js/clock.js         Transport, Lookahead-Scheduler, Quantize, Swing, Aufnahme-Logik
+js/wav.js           WAV-Encoder (16 Bit PCM), ohne Browser-Abhängigkeit
+js/recorder.js      Mix-Mitschnitt (MediaRecorder) und Umkodierung nach WAV
 js/ui.js            Knobs, Slider, Matrix, Keyboard, Scope, Loop-Leiste, Spurenliste
 js/main.js          Verdrahtung von Projekt, Engine, Clock und UI
 server.cjs          Statischer Server (node, ohne Dependencies)
@@ -116,12 +140,12 @@ tests/              Testsuite (node, ohne Test-Framework, jsdom nur für UI-Test
 
 ```
 Spur 1 ─ OSC 1 ─┐
-        OSC 2 ─┴─► VCF (LP/BP/HP) ─► VCA (Amp-Env) ─► Pan ─► Gain ─┐
-Spur 2 …                                                        │
-                                                                ▼
-                                   Bus ─► Master ─► Compressor ─► Analyser ─► Out
-                                    ▲
-   Matrix: 6 Quellen × 8 Ziele ─────┴─► Pitch / Level / Cutoff / Reso / Pan / LFO-Rate
+        OSC 2 ─┴─► VCF (LP/BP/HP) ─► VCA (Amp-Env) ─► Pan ─► Gain ─┬─► Bus ─┐
+Spur 2 …                                                        │         │
+                                                                │         ▼
+                                          Send DLY ─► Delay ◄───┘   Master ─► Compressor ─► Analyser ─► Out
+                                          Send REV ─► Reverb ◄───┘      ▲
+   Matrix: 6 Quellen × 8 Ziele ─────────────────────────────────────────┴─► Pitch / Level / Cutoff / Reso / Pan / LFO-Rate
 
 Clock (Lookahead 25 ms / 120 ms Vorlauf, Ticks 480 PPQ)
    └─► Clip-Events ──► Engine.noteOn(spur, note, vel, when)  (Startzeit exakt im Raster)
@@ -133,8 +157,8 @@ die Note-Logik — dadurch bleiben geplante Releases konsistent.
 ## Tests
 
 ```bash
-npm test           # 71 Tests: Projekt/Clip/MIDI/Engine/Clock
-npm run test:ui    # zusätzlich 16 jsdom-Integrationstests (87 gesamt)
+npm test           # 96 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder
+npm run test:ui    # zusätzlich 19 jsdom-Integrationstests (115 gesamt)
 ```
 
 Die Tests laufen ohne Framework (`node:test`-frei, eigener Mini-Runner in
@@ -150,7 +174,9 @@ komplette UI-Fluss (Spur anlegen, umbenennen, aufnehmen, exportieren, importiere
 | E1 | Transport, Loop-Recorder, Overdub, Quantize, Swing, Playhead | fertig |
 | E2 | Spuren mit eigenem Patch, Projekt-JSON, localStorage-Autosave | fertig |
 | E3 | MIDI-Export/Import (Standard-MIDI-Datei) | fertig |
-| E4 | SoundFont-Instrumente (`smplr`), Delay/Reverb-Sends, WAV-Bounce | offen |
+| E4 | Effekt-Sends (Delay/Reverb), Rausch-Oszillator, zusätzliche Presets | fertig |
+| E5 | Mix-Mitschnitt als WAV | fertig (Browser-Teil manuell zu prüfen) |
+| E6 | SoundFont-Instrumente (`smplr`), Spur-Effekte als Inserts, Song-Modus | offen |
 
 Details und Begründungen: `docs/KOMPONIEREN-KONZEPT.md`, offene Punkte und
 Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`.
@@ -161,3 +187,6 @@ Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`.
 - Die Engine läuft komplett lokal, es werden keine Daten gesendet.
 - `Master` und `Mod-Wheel` bleiben beim Presetwechsel erhalten.
 - Ohne Build-Schritt: alle Dateien sind direkt auslieferbar (`index.html` + `js/*` + `css/*`).
+- Der WAV-Mitschnitt läuft in Echtzeit (Faktor 1) und braucht eine Audioausgabe; in
+  Browsern ohne `MediaRecorder` bleibt der Knopf wirkungslos und meldet das per Toast.
+- Projekte aus älteren Ständen (Schema 1) werden beim Laden automatisch übernommen.

@@ -1,7 +1,8 @@
-# Probleme, Befunde und Entscheidungen (Wellen 2 + 3)
+# Probleme, Befunde und Entscheidungen (Wellen 2–5)
 
 Stand: Branch `arena/63e00fdc-sonic-dsp-sound-modulation-mat`, Basis `7afa23b`.
-Bezug: `docs/PLAN-WELLE-2-3.md` (Pakete P2.1–P2.6, P3.1–P3.3, P4.1–P4.3).
+Bezug: `docs/PLAN-WELLE-2-3.md` (P2.1–P2.6, P3.1–P3.3, P4.1–P4.3) und
+`docs/PLAN-WELLE-4-5.md` (P4.1–P4.5, P5.1–P5.3).
 Dieses Dokument hält fest, **was entschieden wurde, warum, mit welcher Folge** und
 **was noch offen oder nur teilweise geprüft ist**.
 
@@ -41,7 +42,8 @@ keine Automation/Controller-Daten (nur Noten + Tempo), Import max. 8 Spuren/20 0
 
 ### E-04 — Persistenz lokal: JSON-Datei + `localStorage`-Autosave
 
-Speichern = Download einer JSON-Datei; Autosave = `localStorage['sonicdsp.project.v1']`
+Speichern = Download einer JSON-Datei; Autosave = `localStorage['sonicdsp.project']`
+(seit Schema 2; der alte Schlüssel wird weiter gelesen, siehe E-11)
 mit 700 ms Debounce plus Sofortspeicherung bei `beforeunload`. Google Drive ist nicht
 angebunden (Browser-OAuth mit Client-ID ist kein Repo-Schritt, Kategorie C).
 
@@ -105,8 +107,8 @@ der Server bleibt `require`-basiert und dependency-frei. `npm start` ist unverä
 
 | Prüfung | Kommando | Ergebnis |
 | --- | --- | --- |
-| Unit-/Integrationstests | `npm test` | **71/71** |
-| inkl. UI (jsdom) | `npm run test:ui` | **87/87** |
+| Unit-/Integrationstests | `npm test` | **96/96** |
+| inkl. UI (jsdom) | `npm run test:ui` | **115/115** |
 | Syntax aller Module | `node --check js/*.js` | fehlerfrei |
 | Server-Smoke | `node server.cjs` + `curl /` | 200, korrekte Content-Types |
 | Browser-Verhalten (Klang, Layout) | manuell | **nicht** automatisiert prüfbar (jsdom ohne Canvas/Audio) |
@@ -136,9 +138,9 @@ blockiert). WAV-Bounce und Spur-Effekte = **B** (bewusst zurückgestellt).
 
 1. **Browser-Abnahme steht aus:** Klang, Latenz und Layout sind nur im echten Browser
    beurteilbar; die UI-Tests prüfen Verdrahtung, nicht Optik oder Höreindruck.
-2. **Schema-Migration:** `PROJECT_VERSION = 1`. Ältere/neuere Stände werden abgelehnt
-   (klare Fehlermeldung, kein Datenverlust). Ein Migrationspfad existiert erst, wenn sich
-   das Schema ändert.
+2. **Schema-Migration:** `PROJECT_VERSION = 2`, Version 1 wird additiv migriert (E-10).
+   Unbekannte künftige Versionen werden abgelehnt (klare Fehlermeldung, kein Datenverlust).
+   Jede weitere Schemaänderung braucht wieder einen eigenen Migrationsschritt plus Test.
 3. **`localStorage`-Grenze:** sehr große Projekte (viele Noten) können das 5-MB-Limit
    treffen; dann meldet die Statusanzeige „nicht gespeichert", die JSON-Datei bleibt als
    Ausweg.
@@ -146,3 +148,98 @@ blockiert). WAV-Bounce und Spur-Effekte = **B** (bewusst zurückgestellt).
    Effekte und Velocity-Kurven über Controller gehen verloren (dokumentiert).
 5. **Kein Push möglich, falls das Remote-Token fehlt** — dann bleibt der Stand lokal
    committet (siehe Abschlussbericht).
+
+## Entscheidungen Welle 4 + 5
+
+### E-10 — Schema v2 mit additiver Migration
+
+Neu: `track.sends {delay, reverb}` und `project.fx {delayDivision, delayFeedback,
+delayTone, reverbSize, reverbDamp}`. `PROJECT_VERSION = 2`, `SUPPORTED_VERSIONS = [1, 2]`;
+`migrate()` ergänzt bei Version 1 ausschließlich Defaults, alles andere bleibt unverändert.
+Unbekannte Versionen werden weiterhin abgelehnt.
+
+**Folge:** Alte JSON-Dateien bleiben ohne Nutzeraktion lesbar, `migratedFrom` und eine
+Warnung landen im Ladeergebnis. Ein Entfernen oder Umdeuten von Feldern ist in einer
+Migration nicht vorgesehen — dafür bräuchte es einen eigenen, getesteten Schritt.
+
+### E-11 — Storage-Schlüssel gewechselt, alter Stand bleibt erreichbar
+
+Der Schlüssel heißt jetzt `sonicdsp.project` (versionslos), `sonicdsp.project.v1` wird
+weiterhin gelesen (`LEGACY_STORAGE_KEYS`) und nach dem nächsten erfolgreichen Speichern
+entfernt. `saveLocal()` meldet ein volles Kontingent (QuotaExceededError) als eigenen Text.
+
+**Folge:** Kein Nutzer verliert sein Autosave durch die Schemaänderung; der Schlüssel
+muss künftig nicht mehr je Version geändert werden.
+
+### E-12 — Zwei Aux-Busse statt Insert-Effekte pro Spur
+
+Ein Delay- und ein Reverb-Bus, die Sends hängen **hinter** dem Spur-Fader.
+
+**Begründung:** acht Spuren × zwei Inserts wären 16 zusätzliche Knotenketten, hörbar
+kaum besser als ein gemeinsamer Bus, aber deutlich teurer und in der Oberfläche
+unübersichtlich. Post-Fader bedeutet: Mute/Solo wirkt automatisch auch auf die Effekte,
+und es gibt keine zweite Pegel-Wahrheit.
+
+**Grenze:** kein Effekt pro Spur einzeln einstellbar (nur der Anteil). Wenn das gebraucht
+wird, ist ein Spur-Insert ein eigenes Paket mit eigener Kette.
+
+### E-13 — Reverb ohne Assets: prozedurale Impulsantwort
+
+`_buildImpulse(seconds)` erzeugt abklingendes, deterministisches Rauschen (Mulberry32),
+normalisiert auf gleiche Energie; die IR wird nur bei geänderter Größe neu gebaut.
+
+**Folge:** kein Download, keine Lizenzfrage, offline lauffähig, reproduzierbar in Tests.
+Klanglich weniger „Raum" als eine echte IR — für einen Sketch ausreichend.
+
+### E-14 — Rauschen als Wellenform statt Percussion-Samples
+
+`'noise'` ist ein zusätzlicher Wert der Wellenform-Enums; die Stimme nutzt dann eine
+geloopte Rausch-Buffer-Quelle statt eines Oszillators.
+
+**Grenze (bewusst):** ein laufender Noise-Ton wechselt seine Quelle nicht, wenn die
+Wellenform umgestellt wird (`refreshVoices` überspringt Buffer-Quellen). Der nächste Ton
+nutzt die neue Einstellung.
+
+### E-15 — WAV-Export als Echtzeit-Mitschnitt, nicht als Offline-Rendering
+
+`recordOutput()` hängt einen `MediaStreamAudioDestinationNode` an den Analyser und nimmt
+mit `MediaRecorder` auf; `blobToWav()` dekodiert und kodiert mit `js/wav.js`.
+
+**Begründung:** Die Engine rechnet ihre Modulation in JS auf Control-Rate und hängt an
+`currentTime` des laufenden Kontexts. Ein `OfflineAudioContext` würde einen zweiten,
+parallel zu pflegenden Synthesepfad (AudioParam-Automation) erzwingen — genau die zweite
+Wahrheitsquelle, die dieses Projekt vermeidet. Der Mitschnitt benutzt deshalb die echte
+Kette und kostet Zeit in Echtzeit (1/2/4 Loops + 1,6 s Ausklang).
+
+**Grenzen:** `MediaRecorder` nötig (Chrome/Firefox: ja); Ausgabe muss hörbar geroutet sein;
+das Ergebnis ist so gut wie die laufende Session (keine Offline-Genauigkeit, kein
+Sample-Accurate-Bounce bei Überlastung).
+
+### E-16 — Testbarkeit an den Rändern
+
+`throws(fn, /regex/)` prüft jetzt auch die Fehlermeldung; WAV-Kodierung und Dauer-Rechnung
+liegen in reinen Funktionen ohne DOM/Web-Audio, die Browser-Teile (`MediaRecorder`,
+`decodeAudioData`) werden über schmale Fakes geprüft.
+
+**Folge:** Der einzige nicht automatisierbare Rest ist der echte Mitschnitt im Browser —
+er ist isoliert, klein und ohne Folgen für Aufnahme, Speichern oder MIDI abschaltbar.
+
+## Befunde Welle 4 + 5
+
+| Nr. | Befund | Beleg | Behandlung |
+| --- | --- | --- | --- |
+| B-06 | Schema-2-Wechsel hätte den alten Autosave verwaist (Schlüssel enthielt die Version) | Projekt-Test „Alter Autosave-Schlüssel wird gelesen und ersetzt" | Legacy-Schlüssel wird gelesen, migriert und nach erfolgreichem Speichern entfernt |
+| B-07 | Testannahmen, keine App-Fehler: Preset-Auswahl enthält zusätzlich „Custom" (+1 Option); Autosave-Test verglich ein festes Delay-Raster | UI-Tests | Tests an den tatsächlichen Zustand angepasst (Custom-Option, aktuelles Raster statt Literal) |
+
+## Status Welle 4 + 5
+
+| Paket | Status |
+| --- | --- |
+| P4.1 Schema v2 + Migration | umgesetzt, getestet (Roundtrip, Migration, Grenzen, Legacy-Storage) |
+| P4.2 FX-Busse in der Engine | umgesetzt, getestet (Verdrahtung, Sends, Delay-Zeit, IR-Cache, Grenzen) |
+| P4.3 UI für Sends und FX | umgesetzt, UI-getestet |
+| P4.4 Noise-Wellenform + 3 Presets | umgesetzt, getestet (Quelle, Preset-Validierung) |
+| P4.5 Dokumentation | fertig (README, dieses Dokument, Plan) |
+| P5.1 WAV-Encoder | umgesetzt, getestet (Header, Interleaving, Clamping, Fehlerfälle) |
+| P5.2 Recorder | umgesetzt, Encoder-Pfad und Fehlerfälle getestet; **Browser-Teil manuell zu prüfen** |
+| P5.3 UI-Knopf „Mix ⤓ WAV" | umgesetzt, UI-getestet (Fehlerpfad ohne MediaRecorder) |

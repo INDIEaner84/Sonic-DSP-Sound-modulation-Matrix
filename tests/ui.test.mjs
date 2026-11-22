@@ -322,6 +322,15 @@ if (!JSDOM) {
     eq(project.tracks.length, 1);
   });
 
+  test('Mix-Export meldet fehlende Browser-Unterstützung statt zu werfen', async () => {
+    doc.getElementById('bounceBtn').click();
+    await wait(30);
+    const text = doc.getElementById('toast').textContent;
+    assert(text.includes('nicht unterstützt') || text.includes('AUDIO STARTEN'), 'Toast: ' + text);
+    eq(doc.getElementById('bounceBtn').disabled, false);
+    assert(doc.getElementById('bounceLoops').options.length >= 2);
+  });
+
   test('Transport, Scope und Loop-Leiste laufen ohne Fehler', async () => {
     doc.getElementById('playBtn').click();
     await wait(40);
