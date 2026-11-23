@@ -636,6 +636,47 @@ class DrumVoice {
 
 /* ------------------------------------------------------------------ Engine */
 
+/* ------------------------------------------------------------ Instrumente */
+
+/**
+ * Stimmen-Fabriken je Instrument. Der Synth ist der Rückfall für alles
+ * Unbekannte, damit ein Projekt mit künftigem Instrument nicht stumm bleibt.
+ * Weitere Instrumente (z. B. SF2/Samples) registrieren sich zur Laufzeit mit
+ * derselben Stimmen-Schnittstelle: `kind`, `startAt`, `released`, `dead`,
+ * `release(at)`, `scheduleRelease(at)`, `tick(now)`, `dispose()`.
+ */
+const VOICE_FACTORIES = new Map([
+  ['synth', (engine, chain, note, velocity, at) => new Voice(engine, chain, note, velocity, at)],
+  ['piano', (engine, chain, note, velocity, at) => new PianoVoice(engine, chain, note, velocity, at)],
+  ['drums', (engine, chain, note, velocity, at) => new DrumVoice(engine, chain, note, velocity, at)],
+]);
+
+/** Stimmen-Fabrik für ein Instrument (unbekannt → Synth). */
+export function voiceFactoryFor(instrument) {
+  return VOICE_FACTORIES.get(instrument) || VOICE_FACTORIES.get('synth');
+}
+
+/** Registriert ein zusätzliches Instrument. Gibt die vorherige Fabrik zurück. */
+export function registerVoice(instrument, factory) {
+  if (!instrument || typeof factory !== 'function') {
+    throw new TypeError('registerVoice(instrument, factory) braucht Name und Funktion');
+  }
+  const previous = VOICE_FACTORIES.get(instrument) || null;
+  VOICE_FACTORIES.set(instrument, factory);
+  return previous;
+}
+
+/** Entfernt ein zusätzlich registriertes Instrument (Synth bleibt immer). */
+export function unregisterVoice(instrument) {
+  if (instrument === 'synth') return false;
+  return VOICE_FACTORIES.delete(instrument);
+}
+
+/** Alle bekannten Instrument-IDs der Engine (Reihenfolge = Registrierung). */
+export function registeredInstruments() {
+  return [...VOICE_FACTORIES.keys()];
+}
+
 export class Engine {
   constructor() {
     this.ctx = null;
@@ -964,12 +1005,8 @@ export class Engine {
       }
     }
     this._steal(at);
-    const VoiceClass = chain.track.instrument === 'piano'
-      ? PianoVoice
-      : chain.track.instrument === 'drums'
-        ? DrumVoice
-        : Voice;
-    const voice = new VoiceClass(this, chain, note, velocity, at);
+    const factory = voiceFactoryFor(chain.track.instrument);
+    const voice = factory(this, chain, note, velocity, at);
     this.voices.add(voice);
     return voice;
   }

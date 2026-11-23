@@ -1,6 +1,6 @@
 import { test, eq, assert, setFile, near } from './harness.mjs';
 import { FakeAudioContext, stopTimer } from './support/fake-audio.mjs';
-import { Engine } from '../js/audio.js';
+import { Engine, registerVoice, unregisterVoice, voiceFactoryFor, registeredInstruments } from '../js/audio.js';
 import { createProject, createTrack } from '../js/project.js';
 
 setFile('engine');
@@ -374,4 +374,58 @@ test('Drive-Kurve bleibt innerhalb ±1', async () => {
   assert(Math.abs(curve[0]) <= 1 && Math.abs(curve[curve.length - 1]) <= 1, 'Kurve überschreitet ±1');
   const mid = curve[Math.floor(curve.length / 2)];
   assert(Math.abs(mid) < 0.05, 'Mitte muss nahe 0 liegen');
+});
+
+
+test('Instrumente lassen sich als Stimmen-Fabrik registrieren', async () => {
+  const { engine, a } = await setup();
+  const seen = [];
+  class StubVoice {
+    constructor(eng, chain, note, velocity, at) {
+      this.kind = 'sample';
+      this.track = chain.track;
+      this.note = note;
+      this.velocity = velocity;
+      this.startAt = at;
+      this.released = false;
+      this.dead = false;
+      seen.push(this);
+    }
+    release() {
+      this.released = true;
+    }
+    scheduleRelease() {}
+    tick() {}
+    dispose() {
+      this.dead = true;
+    }
+  }
+
+  const previous = registerVoice('sample', (...args) => new StubVoice(...args));
+  eq(previous, null, 'neues Instrument hat keine Vorgänger-Fabrik');
+  assert(registeredInstruments().includes('sample'));
+  eq(voiceFactoryFor('gibtsnicht'), voiceFactoryFor('synth'), 'unbekannt fällt auf Synth zurück');
+
+  a.instrument = 'sample';
+  const voice = engine.noteOn(a.id, 60, 0.8);
+  eq(voice.kind, 'sample');
+  eq(voice.track.id, a.id);
+  eq(seen.length, 1);
+
+  a.instrument = 'gibtsnicht';
+  const fallback = engine.noteOn(a.id, 61, 0.8);
+  eq(fallback.kind, 'synth', 'unbekanntes Instrument klingt wie der Synth');
+
+  /* Vorgänger-Fabrik wird zurückgegeben und lässt sich wiederherstellen. */
+  const again = registerVoice('sample', (...args) => new StubVoice(...args));
+  assert(typeof again === 'function', 'zweite Registrierung liefert die alte Fabrik');
+  eq(unregisterVoice('sample'), true);
+  eq(unregisterVoice('synth'), false, 'der Synth bleibt immer registriert');
+  eq(voiceFactoryFor('sample'), voiceFactoryFor('synth'), 'nach dem Entfernen greift der Rückfall');
+});
+
+test('Aufräumen: keine Test-Instrumente bleiben registriert', () => {
+  unregisterVoice('sample');
+  assert(!registeredInstruments().includes('sample'));
+  eq(registeredInstruments().slice(0, 3), ['synth', 'piano', 'drums']);
 });

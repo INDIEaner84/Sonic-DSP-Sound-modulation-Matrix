@@ -1,7 +1,8 @@
 # Plan: sample-basierte Instrumente (SoundFont / SF2)
 
-Status: **geplant, nicht umgesetzt** (Kategorie C — braucht Assets und eine
-Lizenzentscheidung, die ich nicht erfinden darf). Dieses Dokument ist die Vorlage,
+Status: **vorbereitet, Assets extern blockiert** (Kategorie B). Der Anbindungspunkt in der
+Engine steht seit Welle 8 (`registerVoice`), Schema, Stimme und Asset-Lieferung fehlen noch
+und brauchen freigegebene Dateien plus Lizenzentscheidung. Dieses Dokument ist die Vorlage,
 damit die Umsetzung später ohne Umbau der bestehenden Architektur möglich ist.
 
 ## Warum jetzt nicht
@@ -58,3 +59,29 @@ Samples sind dort eingebettet, was die Lizenzfrage aber nicht automatisch löst.
 Der Umbau liegt in einem Commit (Schema + Stimme + Assets). Rücknahme = Revert; alte
 Projekte mit `sf2`-Spuren fallen beim Laden auf `piano` zurück, wenn die Migration den Wert
 nicht mehr kennt — deshalb muss die Migration **vor** dem Revert geprüft werden.
+
+
+## Vorbereitet in Welle 8 (ohne Assets)
+
+`js/audio.js` wählt die Stimmen-Klasse nicht mehr über eine `if`-Kette, sondern über eine
+Registry:
+
+```js
+voiceFactoryFor(instrument)      // unbekannt → 'synth' (nie Stille)
+registerVoice('sf2', factory)    // Fabrik: (engine, chain, note, velocity, at) => VoiceLike
+unregisterVoice(instrument)
+registeredInstruments()           // ['synth', 'piano', 'drums', …]
+```
+
+Damit ist der spätere Einbau ein **einziger** Registrierungsaufruf plus die `Sf2Voice`-Klasse;
+`Engine.noteOn`, Voice-Stealing, Mute/Solo und Aufnahme bleiben unberührt. Getestet ist:
+Registrierung, Rückfall auf den Synth bei unbekanntem Instrument, Wiederherstellung der alten
+Fabrik, „Synth bleibt immer registriert“.
+
+Noch offen (braucht Entscheidung/Assets):
+
+1. `INSTRUMENTS` + Schema (v6): `{ id: 'sf2', program: 0…127 }` je Spur, Migration additiv.
+2. `Sf2Voice` inkl. `tick/release/scheduleRelease/dispose` und Lazy-Load der Samples.
+3. `assets/instruments/<name>/` mit `LICENSES.md` (Quelle, Lizenz, Bearbeitung); kein Nachladen
+   von Fremd-URLs, damit Vorschau und Offline-Betrieb gleich funktionieren.
+4. Status-Panel: Ladezustand/Sample-Anzahl; Fehler → Toast + Rückfall auf `piano`.

@@ -226,8 +226,8 @@ die Note-Logik — dadurch bleiben geplante Releases konsistent.
 ## Tests
 
 ```bash
-npm test           # 132 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
-npm run test:ui    # zusätzlich 26 jsdom-Integrationstests (158 gesamt)
+npm test           # 134 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
+npm run test:ui    # zusätzlich 27 jsdom-Integrationstests (161 gesamt)
 ```
 
 Die Tests laufen ohne Framework (`node:test`-frei, eigener Mini-Runner in

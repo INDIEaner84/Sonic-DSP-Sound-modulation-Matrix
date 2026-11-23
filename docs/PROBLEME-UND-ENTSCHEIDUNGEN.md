@@ -452,6 +452,21 @@ Echtzeit-Mitschnitt ist bereits die Abnahme für „klingt wie gehört“.
 **Folge:** Die Aufnahmedauer richtet sich weiterhin nach Loops × Loop-Länge; im Song-Modus
 entspricht ein „Loop“ einem Ketten-Durchlauf (`chain.length` Loops).
 
+### E-33 — Instrumente als Registry statt `if`-Kette
+
+`Engine.noteOn` holt die Stimmen-Klasse aus `voiceFactoryFor(track.instrument)`;
+`registerVoice(id, factory)` ergänzt Instrumente zur Laufzeit, unbekannte IDs fallen auf den
+Synth zurück, `synth` ist nicht entfernbar.
+
+**Begründung:** Ein sample-basiertes Instrument braucht eine andere Stimme, aber dieselbe
+Engine-Logik (Stealing, Releases, Pegel, Aufnahme). Eine Registry macht den späteren Einbau
+zu einer Zeile plus Klasse — ohne zweiten Audio-Pfad. Der Rückfall auf den Synth verhindert,
+dass ein Projekt mit unbekanntem Instrument stumm lädt.
+
+**Folge:** `docs/SOUNDFONT-PLAN.md` beschreibt den verbleibenden Rest (Schema v6, `Sf2Voice`,
+Assets + Lizenz). Es wurden **keine** Samples, keine Fremd-URLs und kein SoundFont-Synth
+eingebaut — der Klang ist ohne freigegebene Assets nicht abnehmbar.
+
 ## Status Welle 8
 
 | Paket | Status |
@@ -461,4 +476,4 @@ entspricht ein „Loop“ einem Ketten-Durchlauf (`chain.length` Loops).
 | P8.3 Szenenleiste (Chips, +/−, Song-Schalter, Kettenfeld) | umgesetzt, 2 jsdom-Tests, Browser-Abnahme offen |
 | P8.4 MIDI-Export der Kette, Import in aktive Szene | umgesetzt, 3 MIDI-Tests |
 | P8.5 Doku (README, Plan, Entscheidungen) | dieses Update |
-| P8.6 SoundFont/Sample-Instrumente (Kategorie B) | vorbereitet, Assets/Lizenz extern blockiert |
+| P8.6 SoundFont/Sample-Instrumente (Kategorie B) | Anbindungspunkt fertig (`registerVoice`, 2 Engine-Tests); Assets/Lizenz extern blockiert |
