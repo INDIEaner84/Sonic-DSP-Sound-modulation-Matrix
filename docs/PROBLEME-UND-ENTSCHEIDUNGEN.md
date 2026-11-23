@@ -473,7 +473,7 @@ eingebaut — der Klang ist ohne freigegebene Assets nicht abnehmbar.
 | --- | --- |
 | P8.1 Schema v5, Szenen, Kette, Migration v4→v5 | umgesetzt, 6 Projekttests |
 | P8.2 Clock: Szene je Loop, Aufnahme in aktive Szene, Position mit Szene/Schritt | umgesetzt, 3 Clock-Tests |
-| P8.3 Szenenleiste (Chips, +/−, Song-Schalter, Kettenfeld) | umgesetzt, 2 jsdom-Tests, Browser-Abnahme offen |
+| P8.3 Szenenleiste (Chips, +/−, Song-Schalter, Kettenfeld, Löschen) | umgesetzt, 3 jsdom-Tests, Browser-Abnahme offen |
 | P8.4 MIDI-Export der Kette, Import in aktive Szene | umgesetzt, 3 MIDI-Tests |
 | P8.5 Doku (README, Plan, Entscheidungen) | dieses Update |
 | P8.6 SoundFont/Sample-Instrumente (Kategorie B) | Anbindungspunkt fertig (`registerVoice`, 2 Engine-Tests); Assets/Lizenz extern blockiert |

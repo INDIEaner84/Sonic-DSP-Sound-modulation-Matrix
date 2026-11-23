@@ -99,6 +99,6 @@ Technische Eckpunkte:
 | --- | --- |
 | S1 Schema v5 + Migration + Tests | umgesetzt, 6 Projekttests (Roundtrip, v4→v5, Reparaturfälle) |
 | S2 Clock: Szenenwechsel, Kettenlauf, Aufnahme in aktive Szene | umgesetzt, 3 Clock-Tests (Loop 0/1/2, Aufnahme, Kettenpflege) |
-| S3 UI: Szenenleiste, Song-Schalter, Kettenfeld | umgesetzt, 2 jsdom-Tests |
+| S3 UI: Szenenleiste, Song-Schalter, Kettenfeld, Szene löschen | umgesetzt, 3 jsdom-Tests |
 | S4 MIDI-Export der Kette | umgesetzt, 3 MIDI-Tests (Reihenfolge, 4 Schritte, Import in Szene A) |
 | S5 Doku | dieses Dokument, README, Entscheidungen E-28…E-32 |

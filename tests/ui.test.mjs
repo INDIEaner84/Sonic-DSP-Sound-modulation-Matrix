@@ -469,6 +469,29 @@ if (!JSDOM) {
     eq(errors, []);
   });
 
+  test('Szene löschen räumt Clips und Kette auf', async () => {
+    const chips = () => [...q('#sceneChips .scene-chip')];
+    eq(chips().length, 2, 'für den Test müssen zwei Szenen existieren');
+    const [sceneA, sceneB] = project.scenes;
+    const notesA = project.tracks[0].clips[sceneA.id].count;
+    click(chips()[1]);
+    await wait(20);
+    eq(project.activeSceneId, sceneB.id);
+
+    window.confirm = () => true; // Löschen bestätigen
+    click(doc.getElementById('delSceneBtn'));
+    await wait(20);
+    eq(project.scenes.length, 1, 'Szene B muss weg sein');
+    eq(project.activeSceneId, sceneA.id, 'aktive Szene fällt zurück');
+    eq(project.song.chain.includes(sceneB.id), false, 'Kette enthält die Szene nicht mehr');
+    assert(!(sceneB.id in project.tracks[0].clips), 'Clip der Szene muss entfernt sein');
+    eq(project.tracks[0].clips[sceneA.id].count, notesA, 'Noten der verbleibenden Szene bleiben');
+    eq(chips().length, 1);
+    eq(chips()[0].textContent, 'A');
+    assert(doc.getElementById('delSceneBtn').disabled, 'letzte Szene ist wieder geschützt');
+    eq(errors, []);
+  });
+
   test('MIDI-Panel zeigt Zustand, Learn bleibt ohne Verbindung gesperrt', async () => {
     eq(doc.getElementById('midiStatus').textContent.length > 0, true);
     assert(doc.getElementById('midiLearnBtn').disabled, 'Learn muss ohne Verbindung gesperrt sein');
