@@ -8,7 +8,7 @@
  * Decoder: Format 0/1, Running Status, Meta-Events, Sysex wird übersprungen.
  */
 
-import { createProject, createTrack, PPQ, BEATS_PER_BAR } from './project.js';
+import { createProject, createTrack, clipOf, playOrder, PPQ, BEATS_PER_BAR } from './project.js';
 import { buildPatch } from './state.js';
 import { PRESETS } from './state.js';
 
@@ -127,9 +127,11 @@ function metaEvent(type, data) {
  * @param {{repeats?: number}} options 1–16 Loop-Wiederholungen
  * @returns {Uint8Array}
  */
-export function encodeProject(project, { repeats = 1 } = {}) {
+export function encodeProject(project, { repeats = 1, sequence = null } = {}) {
   const loopTicks = project.bars * BEATS_PER_BAR * MIDI_PPQ;
   const rep = Math.min(16, Math.max(1, Math.round(repeats) || 1));
+  /* Song-Modus: jeder Schritt der Kette ist ein Loop mit eigenem Clip. */
+  const steps = Array.isArray(sequence) && sequence.length ? sequence : null;
 
   const chunks = [];
 
@@ -151,15 +153,27 @@ export function encodeProject(project, { repeats = 1 } = {}) {
   project.tracks.forEach((track, ti) => {
     const channel = ti % 16;
     const items = [];
-    const events = track.clip ? track.clip.events : [];
-
-    for (const ev of events) {
-      for (let r = 0; r < rep; r++) {
-        const base = r * loopTicks;
-        const on = base + ev.tick;
-        const off = Math.min(base + ev.tick + ev.dur, base + loopTicks);
-        items.push({ tick: on, kind: 0, note: ev.note, vel: Math.max(1, Math.round(ev.vel * 127)), channel });
-        items.push({ tick: Math.max(on + 1, off), kind: 1, note: ev.note, vel: 64, channel });
+    if (steps) {
+      steps.forEach((sceneId, step) => {
+        const clip = clipOf(project, track, sceneId);
+        const base = step * loopTicks;
+        for (const ev of clip ? clip.events : []) {
+          const on = base + ev.tick;
+          const off = Math.min(base + ev.tick + ev.dur, base + loopTicks);
+          items.push({ tick: on, kind: 0, note: ev.note, vel: Math.max(1, Math.round(ev.vel * 127)), channel });
+          items.push({ tick: Math.max(on + 1, off), kind: 1, note: ev.note, vel: 64, channel });
+        }
+      });
+    } else {
+      const events = (project.scenes ? clipOf(project, track, project.activeSceneId) : null)?.events || [];
+      for (const ev of events) {
+        for (let r = 0; r < rep; r++) {
+          const base = r * loopTicks;
+          const on = base + ev.tick;
+          const off = Math.min(base + ev.tick + ev.dur, base + loopTicks);
+          items.push({ tick: on, kind: 0, note: ev.note, vel: Math.max(1, Math.round(ev.vel * 127)), channel });
+          items.push({ tick: Math.max(on + 1, off), kind: 1, note: ev.note, vel: 64, channel });
+        }
       }
     }
 
@@ -396,7 +410,7 @@ export function decodeToProject(bytes, { name = 'MIDI-Import', patches = [] } = 
   const loopTicks = bars * BEATS_PER_BAR * MIDI_PPQ;
   if (maxTick > loopTicks) warnings.push('Noten jenseits 16 Takten wurden gekürzt');
 
-  const tracks = srcTracks.map((t, i) => {
+  const built = srcTracks.map((t, i) => {
     const track = createTrack({
       name: (t.name || `MIDI ${i + 1}`).slice(0, 24),
       patch: patches.length ? patches[i % patches.length] : buildPatch({}),
@@ -407,16 +421,19 @@ export function decodeToProject(bytes, { name = 'MIDI-Import', patches = [] } = 
       const dur = Math.max(1, Math.min(loopTicks - tick, Math.round(n.dur * scale) || 1));
       events.push({ tick, dur, note: n.note, vel: Math.max(0, Math.min(1, n.vel)) });
     }
-    track.clip.addEvents(events);
-    return track;
+    return { track, events };
   });
 
   const project = createProject({
     name: String(name).slice(0, 40),
     bpm: parsed.bpm,
     bars,
-    tracks,
-    activeTrackId: tracks[0].id,
+    tracks: built.map((entry) => entry.track),
+    activeTrackId: built[0].track.id,
+  });
+  built.forEach((entry, i) => {
+    const clip = clipOf(project, project.tracks[i], project.activeSceneId);
+    if (clip && entry.events.length) clip.addEvents(entry.events);
   });
   return { ok: true, project, errors: [], warnings };
 }

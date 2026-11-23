@@ -392,3 +392,73 @@ Ohne freigegebene Assets wird nichts davon vorgetäuscht.
 | P7.2 Drive-Regler in der Spurenliste | umgesetzt, UI-getestet |
 | P7.3 Status-Panel | umgesetzt, UI-getestet |
 | P7.4 Pläne für Song-Modus und SoundFont | fertig (Kategorie B bzw. C) |
+
+### E-28 — Szenen-IDs in der Kette, Namen nur als Anzeige
+
+`project.scenes = [{ id: 'scn-A', name: 'A' }, …]`, die Kette speichert **IDs**.
+
+**Begründung:** Ein späteres Umbenennen einer Szene darf das Arrangement nicht zerstören;
+Namen sind Beschriftung, IDs sind Identität. Das Kettenfeld in der UI akzeptiert Namen
+(`A A B`), übersetzt sie beim Übernehmen und zeigt die normalisierte Kette zurück.
+
+**Folge:** Validierung entfernt unbekannte IDs aus der Kette mit Warnung, statt das Projekt
+abzulehnen; die UI meldet unbekannte Namen sofort als Toast und stellt das Feld zurück.
+
+### E-29 — `track.clip` bleibt als Alias auf die aktive Szene
+
+`track.clips` ist die einzige gespeicherte Wahrheit; `track.clip` ist ein nicht-enumerierbarer
+Getter auf `clips[activeSceneId]`.
+
+**Begründung:** Der Umbau berührt Dutzende Zugriffe in Clock, Piano-Roll, MIDI und Tests.
+Ein Alias hält alten Code korrekt, ohne zwei Datenquellen zu erzeugen — JSON enthält nur
+`clips`, und der Getter kann nicht versehentlich mitgespeichert werden.
+
+**Folge:** Nach `validateProject`/`Clip.fromTakes` wird der Alias neu angehängt
+(`attachClipAlias`); andernfalls wäre `track.clip` nach dem Laden `undefined`.
+
+### E-30 — Reparieren statt Ablehnen bei Szenen-Referenzen
+
+Unbekannte `activeSceneId` fällt auf die erste Szene zurück, unbekannte Ketten-Schritte
+werden entfernt, fehlende Szenen-Clips werden leer ergänzt — jeweils mit Warnung.
+Harte Fehler bleiben nur für strukturell Unlesbares (keine Szene, > 8 Szenen, Clip kein
+Objekt, Event außerhalb des Loops).
+
+**Begründung:** Ein Arrangement ist ein Komfort-Feature; ein einzelner verwaister Verweis
+soll nicht das ganze Projekt unladbar machen. Noten gehen dabei nicht verloren.
+
+**Folge:** Tests prüfen beide Wege: Reparatur + Warnung für Referenzen, Fehler für Struktur.
+
+### E-31 — Song-Export als explizite Sequenz
+
+`encodeProject(project, { sequence })` schreibt je Ketten-Schritt einen Loop-Block; ohne
+`sequence` gilt `repeats` für die aktive Szene (max. 16).
+
+**Begründung:** Die Kette kann bis zu 64 Schritte haben — das ist als MIDI-Datei sinnvoll,
+aber nicht über `repeats` ausdrückbar. Der Aufrufer entscheidet, ob er Loop oder Song hört
+(`main.js` übergibt `playOrder(project)`, wenn `song.enabled`).
+
+**Folge:** Import erzeugt weiterhin **eine** Szene (A) mit der Loop-Länge der Datei;
+eine importierte Kette wird als Notenfolge übernommen, nicht als Szenen-Struktur.
+
+### E-32 — WAV-Mitschnitt der Kette ohne zweiten Renderpfad
+
+Der Mix-Mitschnitt nimmt die laufende Ausgabe auf; im Song-Modus läuft die Kette durch das
+Mikrofon des `MediaRecorder`-Pfades, also ohne Sonderfall.
+
+**Begründung:** Ein Offline-Render der Kette müsste Szenenwechsel, Sends und Insert doppelt
+nachbauen — genau die Art Parallelpfad, die später auseinanderläuft. Der vorhandene
+Echtzeit-Mitschnitt ist bereits die Abnahme für „klingt wie gehört“.
+
+**Folge:** Die Aufnahmedauer richtet sich weiterhin nach Loops × Loop-Länge; im Song-Modus
+entspricht ein „Loop“ einem Ketten-Durchlauf (`chain.length` Loops).
+
+## Status Welle 8
+
+| Paket | Status |
+| --- | --- |
+| P8.1 Schema v5, Szenen, Kette, Migration v4→v5 | umgesetzt, 6 Projekttests |
+| P8.2 Clock: Szene je Loop, Aufnahme in aktive Szene, Position mit Szene/Schritt | umgesetzt, 3 Clock-Tests |
+| P8.3 Szenenleiste (Chips, +/−, Song-Schalter, Kettenfeld) | umgesetzt, 2 jsdom-Tests, Browser-Abnahme offen |
+| P8.4 MIDI-Export der Kette, Import in aktive Szene | umgesetzt, 3 MIDI-Tests |
+| P8.5 Doku (README, Plan, Entscheidungen) | dieses Update |
+| P8.6 SoundFont/Sample-Instrumente (Kategorie B) | vorbereitet, Assets/Lizenz extern blockiert |

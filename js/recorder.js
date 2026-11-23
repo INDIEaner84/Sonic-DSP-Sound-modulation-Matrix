@@ -14,12 +14,14 @@ export const MIX_TAIL_SECONDS = 1.6;
 
 const MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
 
-export function mixSeconds(project, loops = 1) {
+export function mixSeconds(project, loops = 1, { stepsPerLoop = 1 } = {}) {
   const bpm = project && Number.isFinite(project.bpm) && project.bpm > 0 ? project.bpm : 120;
   const bars = project && Number.isFinite(project.bars) && project.bars > 0 ? project.bars : 4;
   const loopSeconds = (bars * 4 * 60) / bpm;
   const count = Math.max(1, Math.min(8, Math.round(loops) || 1));
-  return loopSeconds * count + MIX_TAIL_SECONDS;
+  /* Song-Modus: ein gewählter „Loop" ist ein Durchlauf der Kette. */
+  const steps = Math.max(1, Math.min(64, Math.round(stepsPerLoop) || 1));
+  return loopSeconds * count * steps + MIX_TAIL_SECONDS;
 }
 
 /** Kann in dieser Umgebung überhaupt aufgenommen werden? */

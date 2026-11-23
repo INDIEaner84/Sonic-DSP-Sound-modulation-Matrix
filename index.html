@@ -169,6 +169,24 @@
               </div>
             </div>
             <div class="panel-body">
+              <div class="scene-bar">
+                <span class="scene-label">SZENE</span>
+                <div id="sceneChips" class="scene-chips"></div>
+                <button class="btn ghost scene-add" id="addSceneBtn" type="button" title="Neue Szene anlegen">+</button>
+                <button class="btn ghost scene-del" id="delSceneBtn" type="button" title="Aktive Szene löschen">−</button>
+                <label class="scene-song">
+                  <input type="checkbox" id="songEnabled" />
+                  <span>SONG</span>
+                </label>
+                <input
+                  id="songChain"
+                  class="song-chain"
+                  type="text"
+                  maxlength="64"
+                  aria-label="Song-Kette (z. B. A A B)"
+                  placeholder="A A B"
+                />
+              </div>
               <div id="tracks"></div>
               <div class="fx-strip">
                 <div class="fx-head">

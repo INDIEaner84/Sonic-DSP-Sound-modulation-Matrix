@@ -42,6 +42,12 @@ import {
   MIDI_TARGET_LABELS,
   isNumericTarget,
   applyControl,
+  activeClipOf,
+  clipOf,
+  playOrder,
+  createScene,
+  ensureSceneClips,
+  SCENE_NAMES,
 } from './project.js';
 import { encodeProject, decodeToProject, defaultImportPatches } from './midi-io.js';
 import { mixSeconds, canRecord, recordOutput, blobToWav } from './recorder.js';
@@ -397,7 +403,7 @@ const strip = new ClipStrip(document.getElementById('clipCanvas'), {
   clock,
   getClip: () => {
     const t = activeTrack();
-    return t ? t.clip : null;
+    return t ? activeClipOf(project, t) : null;
   },
   badgeEl: document.getElementById('clipBadge'),
 });
@@ -407,6 +413,10 @@ const strip = new ClipStrip(document.getElementById('clipCanvas'), {
 const trackList = createTrackList(document.getElementById('tracks'), {
   getTracks: () => project.tracks,
   getActiveId: () => project.activeTrackId,
+  getClipCount: (track) => {
+    const c = activeClipOf(project, track);
+    return c ? c.count : 0;
+  },
   onSelect: (id) => {
     if (project.activeTrackId === id) return;
     project.activeTrackId = id;
@@ -451,6 +461,7 @@ const trackList = createTrackList(document.getElementById('tracks'), {
     t.instrument = value;
     trackList.build();
     refreshInstrumentUi();
+  refreshSceneUi();
   renderDiagnostics();
     scheduleSave();
     toast(`Spur „${t.name}": ${value.toUpperCase()}`, 'info');
@@ -541,7 +552,10 @@ function diagnosticsText() {
     ? `${midiAccess.devices().length} Eingang/Eingänge`
     : 'nicht verbunden';
   const record = typeof MediaRecorder !== 'undefined' ? 'verfügbar' : 'nicht unterstützt';
-  const notes = project.tracks.reduce((sum, t) => sum + (t.clip ? t.clip.count : 0), 0);
+  const notes = project.tracks.reduce(
+    (sum, t) => sum + (activeClipOf(project, t) ? activeClipOf(project, t).count : 0),
+    0
+  );
   const autosave = document.getElementById('saveState');
   return [
     ['Audio', audio],
@@ -677,6 +691,141 @@ function replaceProject(next) {
 
 document.getElementById('saveBtn').addEventListener('click', downloadJson);
 
+
+/* ----------------------------------------------------------------- Szenen */
+
+const sceneChipsEl = document.getElementById('sceneChips');
+const addSceneBtn = document.getElementById('addSceneBtn');
+const delSceneBtn = document.getElementById('delSceneBtn');
+const songEnabledEl = document.getElementById('songEnabled');
+const songChainEl = document.getElementById('songChain');
+
+function refreshSceneUi() {
+  if (sceneChipsEl) {
+    const playing = clock.running ? clock.position().sceneId : null;
+    sceneChipsEl.innerHTML = '';
+    for (const scene of project.scenes) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className =
+        'scene-chip' +
+        (scene.id === project.activeSceneId ? ' active' : '') +
+        (scene.id === playing ? ' playing' : '');
+      chip.textContent = scene.name;
+      chip.title = `Szene ${scene.name} wählen`;
+      chip.setAttribute('aria-pressed', String(scene.id === project.activeSceneId));
+      chip.addEventListener('click', () => {
+        if (!clock.setScene(scene.id)) return;
+        trackList.build();
+        refreshUI();
+        syncTransportUI();
+        scheduleSave();
+      });
+      sceneChipsEl.appendChild(chip);
+    }
+  }
+  if (delSceneBtn) delSceneBtn.disabled = project.scenes.length <= 1;
+  if (songEnabledEl) songEnabledEl.checked = !!(project.song && project.song.enabled);
+  if (songChainEl && document.activeElement !== songChainEl) {
+    songChainEl.value = chainText();
+  }
+}
+
+function updateScenePlaying() {
+  if (!sceneChipsEl) return;
+  const playing = clock.running ? clock.position().sceneId : null;
+  [...sceneChipsEl.querySelectorAll('.scene-chip')].forEach((chip, index) => {
+    const scene = project.scenes[index];
+    chip.classList.toggle('playing', !!scene && scene.id === playing);
+  });
+}
+
+function chainText() {
+  const byId = new Map(project.scenes.map((scene) => [scene.id, scene.name]));
+  const chain = project.song && Array.isArray(project.song.chain) ? project.song.chain : [];
+  return chain.map((id) => byId.get(id) || '?').join(' ');
+}
+
+function parseChainText(text) {
+  const byName = new Map(project.scenes.map((scene) => [scene.name.toUpperCase(), scene.id]));
+  const ids = [];
+  for (const token of String(text || '').trim().split(/\s+/)) {
+    if (!token) continue;
+    const id = byName.get(token.toUpperCase());
+    if (!id) return { ok: false, unknown: token };
+    ids.push(id);
+  }
+  if (!ids.length) return { ok: false, unknown: '(leer)' };
+  return { ok: true, ids };
+}
+
+if (addSceneBtn) {
+  addSceneBtn.addEventListener('click', () => {
+    if (project.scenes.length >= LIMITS.maxScenes) {
+      toast(`Maximal ${LIMITS.maxScenes} Szenen`, 'warn');
+      return;
+    }
+    const used = new Set(project.scenes.map((scene) => scene.name));
+    const name = SCENE_NAMES.find((n) => !used.has(n)) || `S${project.scenes.length + 1}`;
+    const scene = createScene(name);
+    project.scenes.push(scene);
+    for (const track of project.tracks) ensureSceneClips(track, [scene]);
+    project.song.chain = [...project.song.chain, scene.id];
+    clock.setScene(scene.id);
+    trackList.build();
+    refreshUI();
+    syncTransportUI();
+    scheduleSave();
+    toast(`Szene ${scene.name} angelegt`, 'ok');
+  });
+}
+
+if (delSceneBtn) {
+  delSceneBtn.addEventListener('click', () => {
+    if (project.scenes.length <= 1) {
+      toast('Die letzte Szene kann nicht gelöscht werden', 'warn');
+      return;
+    }
+    const idx = project.scenes.findIndex((scene) => scene.id === project.activeSceneId);
+    if (idx < 0) return;
+    if (!window.confirm('Aktive Szene mit ihrem Inhalt löschen?')) return;
+    const [removed] = project.scenes.splice(idx, 1);
+    for (const track of project.tracks) {
+      if (track.clips) delete track.clips[removed.id];
+    }
+    project.song.chain = project.song.chain.filter((id) => id !== removed.id);
+    if (!project.song.chain.length) project.song.chain = [project.scenes[0].id];
+    project.activeSceneId = project.scenes[Math.max(0, idx - 1)].id;
+    clock.emit();
+    trackList.build();
+    refreshUI();
+    syncTransportUI();
+    scheduleSave();
+    toast(`Szene ${removed.name} gelöscht`, 'info');
+  });
+}
+
+if (songEnabledEl) {
+  songEnabledEl.addEventListener('change', () => {
+    clock.setSong(songEnabledEl.checked);
+    scheduleSave();
+    toast(songEnabledEl.checked ? 'Song-Modus: Kette läuft' : 'Loop-Modus: aktive Szene', 'info');
+  });
+}
+
+if (songChainEl) {
+  songChainEl.addEventListener('change', () => {
+    const parsed = parseChainText(songChainEl.value);
+    if (!parsed.ok) {
+      toast(`Unbekannte Szene „${parsed.unknown}“ in der Kette`, 'warn');
+      songChainEl.value = chainText();
+      return;
+    }
+    clock.setChain(parsed.ids);
+    songChainEl.value = chainText();
+    scheduleSave();
+  });
+}
 
 /* ------------------------------------------------------- Pads & Instrument */
 
@@ -948,7 +1097,8 @@ async function bounceMix() {
     return;
   }
   const loops = clamp(Number(bounceLoops && bounceLoops.value) || 1, 1, 8);
-  const seconds = mixSeconds(project, loops);
+  const stepsPerLoop = project.song && project.song.enabled ? Math.max(1, project.song.chain.length) : 1;
+  const seconds = mixSeconds(project, loops, { stepsPerLoop });
   bouncing = true;
   const label = bounceBtn ? bounceBtn.textContent : '';
   if (bounceBtn) bounceBtn.disabled = true;
@@ -1006,7 +1156,8 @@ document.getElementById('newBtn').addEventListener('click', newProject);
 document.getElementById('midiExportBtn').addEventListener('click', () => {
   const repeats = Number(document.getElementById('midiRepeats').value) || 1;
   try {
-    const bytes = encodeProject(project, { repeats });
+    const songOrder = project.song && project.song.enabled ? playOrder(project) : null;
+    const bytes = encodeProject(project, { repeats, sequence: songOrder });
     const ok = downloadBlob(new Blob([bytes], { type: 'audio/midi' }), safeFilename(project.name, 'mid'));
     toast(ok ? `MIDI exportiert (${Math.round(bytes.length / 1024)} KB, ${repeats}× Loop)` : 'Download nicht verfügbar', ok ? 'ok' : 'warn');
   } catch (err) {
@@ -1096,18 +1247,20 @@ function syncTransportUI() {
   playBtn.classList.toggle('on', clock.running);
   recLabel.textContent = clock.recording ? 'Rec…' : 'Rec';
   playLabel.textContent = clock.running ? 'Stop' : 'Play';
-  undoBtn.disabled = !track || track.clip.takeCount === 0;
-  clearClipBtn.disabled = !track || track.clip.count === 0;
+  const clip = track ? activeClipOf(project, track) : null;
+  undoBtn.disabled = !clip || clip.takeCount === 0;
+  clearClipBtn.disabled = !clip || clip.count === 0;
   metroBtn.classList.toggle('on', clock.metronome);
   bpmVal.textContent = String(clock.bpm);
-  takeInfo.textContent = track
-    ? `${track.clip.count} Noten · ${track.clip.takeCount} ${track.clip.takeCount === 1 ? 'Take' : 'Takes'}`
+  takeInfo.textContent = clip
+    ? `${clip.count} Noten · ${clip.takeCount} ${clip.takeCount === 1 ? 'Take' : 'Takes'}`
     : '–';
   const tag = document.getElementById('trackTag');
   if (tag) tag.textContent = `${project.tracks.length} / ${LIMITS.maxTracks}`;
   loopSeg.set(String(clock.bars));
   quantSeg.set(String(clock.quantizeStep));
   swingSlider.set(clock.swing);
+  updateScenePlaying();
 }
 
 clock.onChange(() => {
@@ -1253,6 +1406,7 @@ function refreshUI() {
   syncPresetSelect();
   updateOctaveLabel();
   refreshInstrumentUi();
+  refreshSceneUi();
   renderDiagnostics();
   projectNameInput.value = project.name;
 }

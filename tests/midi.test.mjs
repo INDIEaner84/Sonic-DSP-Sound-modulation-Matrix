@@ -1,5 +1,14 @@
 import { test, eq, assert, setFile, near } from './harness.mjs';
-import { createProject, createTrack, serialize, deserialize, PPQ } from '../js/project.js';
+import {
+  createProject,
+  createTrack,
+  serialize,
+  deserialize,
+  createScene,
+  ensureSceneClips,
+  clipOf,
+  PPQ,
+} from '../js/project.js';
 import { encodeProject, decodeMidi, decodeToProject, defaultImportPatches } from '../js/midi-io.js';
 
 setFile('midi');
@@ -168,4 +177,66 @@ test('Große Ticks (VLQ) bleiben exakt', () => {
   const parsed = decodeMidi(encodeProject(project));
   assert(parsed.ok, parsed.errors.join(', '));
   eq(parsed.tracks[0].notes[0].tick, 15 * 4 * PPQ - 120);
+});
+
+
+test('Song-Kette exportiert einen Loop je Ketten-Schritt', () => {
+  const track = createTrack({ name: 'Lead' });
+  const project = createProject({ tracks: [track], bars: 2, bpm: 120 });
+  const sceneA = project.scenes[0];
+  const sceneB = createScene('B');
+  project.scenes.push(sceneB);
+  ensureSceneClips(track, project.scenes);
+  clipOf(project, track, sceneA.id).addEvents([{ tick: 0, dur: 240, note: 60, vel: 0.8 }]);
+  clipOf(project, track, sceneB.id).addEvents([{ tick: 0, dur: 240, note: 67, vel: 0.6 }]);
+
+  const loopTicks = 2 * 4 * 480;
+  const plain = decodeMidi(encodeProject(project));
+  assert(plain.ok, plain.errors.join(' | '));
+  const plainNotes = plain.tracks[0].notes;
+  eq(plainNotes.length, 1, 'ohne Sequenz nur die aktive Szene');
+  eq(plainNotes[0].note, 60);
+
+  const bytes = encodeProject(project, { sequence: [sceneA.id, sceneB.id] });
+  const parsed = decodeMidi(bytes);
+  assert(parsed.ok, parsed.errors.join(' | '));
+  const notes = parsed.tracks[0].notes;
+  eq(notes.length, 2, 'zwei Schritte = zwei Noten');
+  eq(notes.map((n) => n.note), [60, 67]);
+  eq(notes[1].tick, loopTicks, 'zweiter Schritt beginnt einen Loop später');
+  eq(notes[1].tick % loopTicks, 0);
+});
+
+test('Song-Export mit vier Schritten bleibt gültiges SMF', () => {
+  const track = createTrack({ name: 'Lead' });
+  const project = createProject({ tracks: [track], bars: 1, bpm: 100 });
+  const sceneA = project.scenes[0];
+  const sceneB = createScene('B');
+  project.scenes.push(sceneB);
+  ensureSceneClips(track, project.scenes);
+  clipOf(project, track, sceneA.id).addEvents([{ tick: 0, dur: 100, note: 55, vel: 0.7 }]);
+  clipOf(project, track, sceneB.id).addEvents([{ tick: 480, dur: 100, note: 57, vel: 0.7 }]);
+
+  const order = [sceneA.id, sceneB.id, sceneB.id, sceneA.id];
+  const parsed = decodeMidi(encodeProject(project, { sequence: order }));
+  assert(parsed.ok, parsed.errors.join(' | '));
+  eq(parsed.tracks[0].notes.map((n) => n.note), [55, 57, 57, 55]);
+  eq(parsed.bpm, 100);
+});
+
+test('MIDI-Import landet in Szene A (aktive Szene)', () => {
+  const imported = decodeToProject(encodeProject(project2Tracks()));
+  assert(imported.ok, imported.errors.join(' | '));
+  const project = imported.project;
+  eq(project.scenes.length, 1);
+  eq(project.song.enabled, false);
+  eq([...project.song.chain], [project.activeSceneId]);
+  for (const track of project.tracks) {
+    eq(track.clip, track.clips[project.activeSceneId], 'Alias zeigt auf Szene A');
+  }
+  const total = project.tracks.reduce((sum, t) => sum + t.clip.count, 0);
+  eq(total, 4, 'drei Bass-Noten + eine Keys-Note');
+  const back = deserialize(JSON.stringify(serialize(project)));
+  assert(back.ok, back.errors.join(' | '));
+  eq(back.project.tracks[0].clip.count, 3);
 });

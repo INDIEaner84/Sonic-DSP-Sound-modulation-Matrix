@@ -19,6 +19,10 @@ Jede Spur hat ein **Instrument**: `SYNTH` (der Patch mit Matrix), `PIANO` (Parti
 velocity-abhängig) oder `DRUMS` (Kit mit acht Pads, GM-Noten 36–49). Klavier und Kit sind
 synthetisch erzeugt — keine Sample-Downloads, keine Lizenzfragen.
 
+Jede Spur hat außerdem **Szenen**: bis zu acht Teile (A–H) mit je eigenem Clip. Ein
+**Song-Modus** spielt eine Kette (`A A B A …`) automatisch durch; ohne Song-Modus loopt die
+aktive Szene. Projektdatei-Schema ist v5, ältere Stände (v1–v4) werden beim Laden migriert.
+
 Ein **Delay- und ein Reverb-Bus** liegen hinter den Spuren; jede Spur hat eigene Sends.
 Die Reverb-Impulsantwort wird im Browser erzeugt (kein Sample-Download, keine Assets).
 Für Percussion gibt es die Wellenform `NOISE`; fertige Mixe lassen sich in Echtzeit
@@ -95,7 +99,7 @@ zeigt die Noten farbig pro Take und den Playhead.
 | **Neu** | leeres Projekt (mit Rückfrage) |
 | **MIDI Export** | Standard-MIDI-Datei (Format 1), Wiederholungen 1–16 wählbar |
 | **MIDI Import** | MIDI-Datei als Projekt übernehmen (max. 8 Spuren) |
-| **Mix ⤓ WAV** | nimmt die laufende Ausgabe in Echtzeit auf (1/2/4 Loops + Ausklang) und speichert sie als WAV; das Metronom ist dabei stumm |
+| **Mix ⤓ WAV** | nimmt die laufende Ausgabe in Echtzeit auf (1/2/4 Loops + Ausklang) und speichert sie als WAV; im Song-Modus zählt ein Loop als **ein Ketten-Durchlauf**, das Metronom ist dabei stumm |
 | **INST** in der Spurzeile | Instrument der Spur: SYNTH / PIANO / DRUMS |
 
 Autosave: jede Änderung wird nach 700 ms in `localStorage` geschrieben
@@ -106,6 +110,24 @@ generell als Toast unten mittig im Bild.
 
 Preset-Auswahl wirkt immer auf die **aktive Spur**:
 Init Lead, Wobble Bass, Pluck Lead, Drift Pad, Res Sweep FX, Sub Bass, Noise Hat, Glass Bell.
+
+### Szenen und Song-Modus
+
+Über der Spurenliste sitzt die Szenenleiste: Chips `A B C …`, `+` / `−`, der Schalter
+**SONG** und ein Feld für die Kette.
+
+| Element | Wirkung |
+| --- | --- |
+| Szene-Chip `A B …` | Szene wählen – Aufnahme, Piano-Roll und Loop-Leiste zeigen deren Clip (max. 8 Szenen) |
+| **+** | neue Szene (nächster freier Name) mit leerem Clip je Spur; sie hängt sich an die Kette |
+| **−** | aktive Szene samt Inhalt löschen (Rückfrage; die letzte Szene bleibt geschützt) |
+| **SONG** | Kette abspielen statt Loop der aktiven Szene; der laufende Schritt ist am Chip markiert |
+| Kettenfeld | `A A B A` – ein Schritt pro Loop; unbekannte Namen werden mit Toast abgewiesen |
+| **MIDI Export** | im Song-Modus eine Notenfolge über die ganze Kette, sonst `Wiederholungen` der aktiven Szene |
+
+Die Loop-Länge (Takte, Tempo) gilt für alle Szenen; nur die Noten unterscheiden sich.
+`Speichern (JSON)` enthält Szenen, aktive Szene und Kette; ältere Dateien landen beim Laden
+automatisch in Szene A. Details: `docs/PLAN-SONG-MODUS.md`.
 
 ### Instrumente und Pads
 
@@ -204,8 +226,8 @@ die Note-Logik — dadurch bleiben geplante Releases konsistent.
 ## Tests
 
 ```bash
-npm test           # 119 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
-npm run test:ui    # zusätzlich 25 jsdom-Integrationstests (144 gesamt)
+npm test           # 132 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
+npm run test:ui    # zusätzlich 26 jsdom-Integrationstests (158 gesamt)
 ```
 
 Die Tests laufen ohne Framework (`node:test`-frei, eigener Mini-Runner in
@@ -225,7 +247,8 @@ komplette UI-Fluss (Spur anlegen, umbenennen, aufnehmen, exportieren, importiere
 | E5 | Mix-Mitschnitt als WAV | fertig (Browser-Teil manuell zu prüfen) |
 | E6 | Instrumente je Spur (Klavier, Drum-Kit, Pads), Web-MIDI-Eingang mit CC-Learn | fertig (Web MIDI nur im Browser prüfbar) |
 | E7 | Spur-Insert (Drive) und Status-Panel | fertig |
-| E8 | SoundFont-Instrumente (`smplr`) und Song-Modus | geplant, siehe `docs/SOUNDFONT-PLAN.md` und `docs/PLAN-SONG-MODUS.md` |
+| E8 | Song-Modus: Szenen, Kette, MIDI-Export der Kette (Schema v5) | fertig (Browser-Abnahme des Durchlaufs offen) |
+| E9 | SoundFont-/Sample-Instrumente | vorbereitet, Assets und Lizenz extern blockiert – `docs/SOUNDFONT-PLAN.md` |
 
 Details und Begründungen: `docs/KOMPONIEREN-KONZEPT.md`, offene Punkte und
 Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`.

@@ -1,9 +1,10 @@
 # Plan: Song-Modus (Szenen und Arrangement)
 
-Status: **geplant, nicht umgesetzt.** Der aktuelle Stand kann Loop-Musik in mehreren Spuren
-aufnehmen, speichern, exportieren und abspielen — aber immer **einen** Loop. Ein Song-Modus
-braucht ein eigenes Datenmodell und einen eigenen Umbau von Clip/Clock/UI. Dieses Dokument
-hält den Zuschnitt fest, damit die Arbeit nicht zwischen zwei Wellen halbfertig liegt.
+Status: **umgesetzt in Welle 8** (Schema v5). Szenen und Song-Kette sind im Datenmodell,
+in der Clock, im MIDI-Export und in der Szenenleiste der Oberfläche implementiert und
+getestet; offen ist nur die Browser-Abnahme (Klang/Clip-Wechsel hören) wie bei allen
+Audio-Pfaden. Die ursprüngliche Planung bleibt unten als Zuschnitt erhalten, die Abschnitte
+„Umsetzung“ beschreiben den tatsächlichen Stand.
 
 ## Ziel
 
@@ -66,3 +67,38 @@ track.clips = { [sceneId]: { takes: [...] } }; // statt track.takes
 1. SoundFont-Anbindung (`docs/SOUNDFONT-PLAN.md`) — klein, sobald Assets freigegeben sind.
 2. Song-Modus (dieses Dokument) — größter Einzelblock.
 3. Spur-Inserts über Drive hinaus (Chorus/Filter) — nur wenn gebraucht.
+
+
+## Umsetzung (Welle 8)
+
+Abweichungen vom ursprünglichen Vorschlag, jeweils mit Grund:
+
+| Punkt | Plan | Umgesetzt | Grund |
+| --- | --- | --- | --- |
+| Kette | Szenen-**Namen** (`'A','B'`) | Szenen-**IDs** (`'scn-A'`, `'scn-…'`) | Umbenennen darf die Kette nicht brechen; Namen sind nur Anzeige |
+| `loopChain` | geplant | entfällt | `song.enabled` entscheidet Loop ↔ Kette; ein zweites Flag wäre redundant |
+| `track.takes` | entfällt | bleibt als toleriertes Altfeld, wird beim Laden ignoriert | v5-Dateien mit `takes` sollen nicht hart scheitern |
+| Fehlerfälle | harte Fehler | Reparatur + Warnung | Unbekannte Szene/Ketten-Schritt/fehlender Clip wird repariert, damit ein Projekt nicht durch eine kaputte Referenz unladbar wird |
+| WAV der Kette | eigener Offline-Render | Live-Mitschnitt der Wiedergabe (wie bisher) | Der Recorder nimmt die echte Ausgabe; damit ist die Kette automatisch enthalten, ohne zweiten Renderpfad |
+
+Technische Eckpunkte:
+
+- `clipOf(project, track, sceneId)` / `activeClipOf` / `allClipsOf` kapseln jeden Clip-Zugriff.
+- `track.clip` bleibt als nicht-enumerierbarer Getter auf die **aktive** Szene erhalten
+  (Altcode und alte Tests bleiben gültig, JSON enthält nur `clips`).
+- `sceneIdAtLoop(project, k)` liefert die Szene für Loop `k`; die Clock plant damit weiterhin
+  pro Fenster, also **im Voraus** und ohne doppelte Noten an der Grenze.
+- `playOrder(project)` ist die einzige Quelle für die Abspielreihenfolge (Kette oder aktive
+  Szene) und wird von Transport-Position, MIDI-Export und UI genutzt.
+- MIDI-Export im Song-Modus: `encodeProject(project, { sequence: playOrder(project) })` schreibt
+  einen Loop-Block je Ketten-Schritt (Länge = Schritte × Loop-Länge).
+
+### Status der Pakete
+
+| Paket | Status |
+| --- | --- |
+| S1 Schema v5 + Migration + Tests | umgesetzt, 6 Projekttests (Roundtrip, v4→v5, Reparaturfälle) |
+| S2 Clock: Szenenwechsel, Kettenlauf, Aufnahme in aktive Szene | umgesetzt, 3 Clock-Tests (Loop 0/1/2, Aufnahme, Kettenpflege) |
+| S3 UI: Szenenleiste, Song-Schalter, Kettenfeld | umgesetzt, 2 jsdom-Tests |
+| S4 MIDI-Export der Kette | umgesetzt, 3 MIDI-Tests (Reihenfolge, 4 Schritte, Import in Szene A) |
+| S5 Doku | dieses Dokument, README, Entscheidungen E-28…E-32 |

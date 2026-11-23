@@ -4,7 +4,19 @@
  * geplant (kein rAF, kein nacktes setInterval für Noten).
  */
 
-import { trackAudible, activeTrackOf, loopTicksOf, PPQ, BEATS_PER_BAR, LIMITS } from './project.js';
+import {
+  trackAudible,
+  activeTrackOf,
+  loopTicksOf,
+  clipOf,
+  activeClipOf,
+  allClipsOf,
+  sceneIdAtLoop,
+  playOrder,
+  PPQ,
+  BEATS_PER_BAR,
+  LIMITS,
+} from './project.js';
 
 export { PPQ, BEATS_PER_BAR };
 
@@ -99,7 +111,7 @@ export class Clock {
     this._scheduledUntil = now;
     this.running = true;
     this.recording = false;
-    for (const t of this.project.tracks) t.clip.closeOpen(this.loopTicks);
+    for (const clip of allClipsOf(this.project)) clip.closeOpen(this.loopTicks);
 
     if (countIn && this.metronome) this._scheduleCountIn(now, pre);
     if (record) this.beginRecording();
@@ -110,7 +122,7 @@ export class Clock {
   }
 
   stop() {
-    for (const t of this.project.tracks) t.clip.endTake(this.loopTicks);
+    for (const clip of allClipsOf(this.project)) clip.endTake(this.loopTicks);
     this.running = false;
     this.recording = false;
     this._live.clear();
@@ -136,7 +148,7 @@ export class Clock {
 
   endRecording() {
     this.recording = false;
-    for (const t of this.project.tracks) t.clip.endTake(this.loopTicks);
+    for (const clip of allClipsOf(this.project)) clip.endTake(this.loopTicks);
     this.emit();
   }
 
@@ -189,6 +201,33 @@ export class Clock {
     this.emit();
   }
 
+  /** Szene wählen (greift sofort, Aufnahme läuft in diese Szene). */
+  setScene(sceneId) {
+    if (!this.project.scenes.some((scene) => scene.id === sceneId)) return false;
+    if (this.project.activeSceneId === sceneId) return false;
+    for (const clip of allClipsOf(this.project)) clip.endTake(this.loopTicks);
+    this.project.activeSceneId = sceneId;
+    this.emit();
+    return true;
+  }
+
+  setSong(enabled) {
+    this.project.song.enabled = !!enabled;
+    this.emit();
+  }
+
+  setChain(chain) {
+    const ids = new Set(this.project.scenes.map((scene) => scene.id));
+    const next = (Array.isArray(chain) ? chain : []).filter((id) => ids.has(id)).slice(0, LIMITS.maxChain);
+    this.project.song.chain = next.length ? next : [this.project.activeSceneId];
+    this.emit();
+  }
+
+  /** Szenen in Abspielreihenfolge (Song-Kette oder aktive Szene). */
+  get playlist() {
+    return playOrder(this.project);
+  }
+
   /* ------------------------------------------------------------------ Timing */
 
   _startTimer() {
@@ -228,7 +267,6 @@ export class Clock {
     const last = Math.floor((to - this.loopStart) / dur);
 
     for (const track of this.project.tracks) {
-      if (!track.clip || !track.clip.takes.length) continue;
       if (!trackAudible(track, this.project.tracks)) continue;
 
       for (let k = first; k <= last; k++) {
@@ -237,7 +275,11 @@ export class Clock {
         const w1 = Math.min(dur, to - base);
         if (w1 <= 0) continue;
 
-        for (const { ev, t } of track.clip.eventsInWindow(w0, w1, this.secPerTick, (tick) => this.swingOffset(tick))) {
+        /* Szene je Loop: bei Song-Kette läuft jede Runde ein anderer Clip. */
+        const clip = clipOf(this.project, track, sceneIdAtLoop(this.project, k));
+        if (!clip || !clip.takes.length) continue;
+
+        for (const { ev, t } of clip.eventsInWindow(w0, w1, this.secPerTick, (tick) => this.swingOffset(tick))) {
           const when = base + t;
           const voice = this.engine.noteOn(track.id, ev.note, ev.vel, when);
           if (voice) this.engine.scheduleRelease(voice, when + Math.max(0.03, ev.dur * this.secPerTick));
@@ -299,6 +341,8 @@ export class Clock {
       beat: 1,
       sixteenth: 1,
       loopIndex: 0,
+      sceneId: this.project ? this.project.activeSceneId : null,
+      songStep: 0,
       countdown: 0,
     };
     const ctx = this.ctx;
@@ -315,9 +359,13 @@ export class Clock {
     const bar = Math.floor(ticks / (BEATS_PER_BAR * PPQ)) + 1;
     const beat = Math.floor((ticks % (BEATS_PER_BAR * PPQ)) / PPQ) + 1;
     const sixteenth = Math.floor((ticks % PPQ) / (PPQ / 4)) + 1;
+    const sceneId = sceneIdAtLoop(this.project, loopIndex);
+    const chain = this.playlist;
     return {
       running: true,
       counting: false,
+      sceneId,
+      songStep: chain.indexOf(sceneId),
       phase: inLoop / dur,
       ticks,
       bar,
@@ -344,9 +392,12 @@ export class Clock {
     }
 
     if (this.recording && this.running && ctx.currentTime >= this.loopStart) {
-      if (!track.clip.isRecording) track.clip.beginTake();
-      const tick = this.quantized(this.currentTicks());
-      track.clip.startNote(note, velocity, tick);
+      const clip = activeClipOf(this.project, track);
+      if (clip) {
+        if (!clip.isRecording) clip.beginTake();
+        const tick = this.quantized(this.currentTicks());
+        clip.startNote(note, velocity, tick);
+      }
     }
     return voice;
   }
@@ -365,8 +416,8 @@ export class Clock {
     }
 
     if (this.recording && this.running && this.ctx && this.ctx.currentTime >= this.loopStart) {
-      const tick = this.quantized(this.currentTicks());
-      track.clip.endNote(note, tick, this.loopTicks);
+      const clip = activeClipOf(this.project, track);
+      if (clip) clip.endNote(note, this.quantized(this.currentTicks()), this.loopTicks);
     }
   }
 
@@ -385,14 +436,16 @@ export class Clock {
 
   undo() {
     const track = this.activeTrack;
-    const ok = track ? track.clip.undo() : false;
+    const clip = track ? activeClipOf(this.project, track) : null;
+    const ok = clip ? clip.undo() : false;
     this.emit();
     return ok;
   }
 
   clearClip() {
     const track = this.activeTrack;
-    if (track) track.clip.clear();
+    const clip = track ? activeClipOf(this.project, track) : null;
+    if (clip) clip.clear();
     this.emit();
   }
 }

@@ -25,6 +25,13 @@ import {
   MIDI_TARGETS,
   INSTRUMENTS,
   PPQ,
+  createScene,
+  ensureSceneClips,
+  activeClipOf,
+  clipOf,
+  playOrder,
+  sceneIdAtLoop,
+  SCENE_NAMES,
 } from '../js/project.js';
 import { buildPatch } from '../js/state.js';
 
@@ -140,7 +147,7 @@ test('Patch-Enum und -Bereich werden geprüft', () => {
 
 test('Note außerhalb des Loops wird abgelehnt', () => {
   const raw = serialize(createProject({ tracks: [createTrack({ name: 'X' })], bars: 1 }));
-  raw.tracks[0].takes = [[{ tick: 4 * 480, dur: 10, note: 60, vel: 0.5 }]];
+  raw.tracks[0].clips[raw.activeSceneId] = [[{ tick: 4 * 480, dur: 10, note: 60, vel: 0.5 }]];
   const result = validateProject(raw);
   assert(!result.ok);
   assert(result.errors[0].includes('tick'), result.errors[0]);
@@ -148,7 +155,7 @@ test('Note außerhalb des Loops wird abgelehnt', () => {
 
 test('Ungültige Note/Dauer/Velocity werden abgelehnt', () => {
   const raw = serialize(createProject({ tracks: [createTrack({ name: 'X' })] }));
-  raw.tracks[0].takes = [[{ tick: 0, dur: 0, note: 200, vel: 3 }]];
+  raw.tracks[0].clips[raw.activeSceneId] = [[{ tick: 0, dur: 0, note: 200, vel: 3 }]];
   const result = validateProject(raw);
   assert(!result.ok);
   eq(result.errors.length, 3, 'drei Feldfehler erwartet: ' + result.errors.join(' | '));
@@ -408,4 +415,142 @@ test('Insert (Drive) wird validiert, migriert und serialisiert', () => {
   assert(migrated.ok, migrated.errors.join(' | '));
   eq(migrated.migratedFrom, 3);
   eq(migrated.project.tracks[0].insert.drive, 0);
+});
+
+
+test('Projekt startet mit Szene A im Loop-Modus', () => {
+  const track = createTrack({ name: 'Lead' });
+  const project = createProject({ tracks: [track] });
+  eq(project.scenes.length, 1);
+  eq(project.scenes[0].name, 'A');
+  eq(project.activeSceneId, project.scenes[0].id);
+  eq(project.song.enabled, false);
+  eq([...project.song.chain], [project.activeSceneId]);
+  assert(track.clips[project.activeSceneId], 'Clip für Szene A fehlt');
+  eq(track.clip, track.clips[project.activeSceneId], 'clip-Alias zeigt auf die aktive Szene');
+  eq(SCENE_NAMES.length, 8);
+});
+
+test('Szenen halten getrennte Clips und teilen sich das Tempo', () => {
+  const track = createTrack({ name: 'Lead' });
+  const project = createProject({ tracks: [track], bars: 1 });
+  const sceneB = createScene('B');
+  project.scenes.push(sceneB);
+  ensureSceneClips(track, project.scenes);
+
+  const clipA = activeClipOf(project, track);
+  clipA.addEvents([{ tick: 0, dur: 120, note: 60, vel: 0.8 }]);
+  const clipB = clipOf(project, track, sceneB.id);
+  clipB.addEvents([{ tick: 240, dur: 120, note: 67, vel: 0.6 }]);
+
+  eq(clipA.count, 1);
+  eq(clipB.count, 1);
+  eq(clipA.events[0].note, 60);
+  eq(clipB.events[0].note, 67);
+
+  project.activeSceneId = sceneB.id;
+  eq(track.clip, clipB, 'Alias folgt der aktiven Szene');
+  eq(activeClipOf(project, track).events[0].note, 67);
+});
+
+test('Song-Kette bestimmt die Loop-Reihenfolge', () => {
+  const track = createTrack({ name: 'Lead' });
+  const project = createProject({ tracks: [track] });
+  const sceneB = createScene('B');
+  project.scenes.push(sceneB);
+  ensureSceneClips(track, project.scenes);
+
+  eq(sceneIdAtLoop(project, 0), project.scenes[0].id, 'ohne Song nur aktive Szene');
+  eq(sceneIdAtLoop(project, 5), project.scenes[0].id);
+  eq([...playOrder(project)], [project.activeSceneId], 'playOrder ohne Song = eine Szene');
+
+  project.song.enabled = true;
+  project.song.chain = [project.scenes[0].id, sceneB.id, sceneB.id];
+  eq(sceneIdAtLoop(project, 0), project.scenes[0].id);
+  eq(sceneIdAtLoop(project, 1), sceneB.id);
+  eq(sceneIdAtLoop(project, 2), sceneB.id);
+  eq(sceneIdAtLoop(project, 3), project.scenes[0].id, 'Kette läuft weiter');
+  eq([...playOrder(project)], project.song.chain);
+});
+
+test('Szenen und Song überleben Serialisierung und Validierung', () => {
+  const track = createTrack({ name: 'Lead' });
+  const project = createProject({ tracks: [track], bars: 1 });
+  const sceneB = createScene('B');
+  project.scenes.push(sceneB);
+  ensureSceneClips(track, project.scenes);
+  clipOf(project, track, sceneB.id).addEvents([{ tick: 0, dur: 240, note: 62, vel: 0.5 }]);
+
+  const raw = serialize(project);
+  eq(raw.version, 5);
+  eq(raw.scenes.length, 2);
+  eq(raw.tracks[0].takes, undefined, 'v5 schreibt kein takes-Feld mehr');
+  assert(Array.isArray(raw.tracks[0].clips[sceneB.id]));
+
+  const back = deserialize(JSON.stringify(raw));
+  assert(back.ok, back.errors.join(' | '));
+  const reloaded = back.project;
+  eq(reloaded.scenes.length, 2);
+  eq(activeClipOf(reloaded, reloaded.tracks[0]).count, 0);
+  eq(clipOf(reloaded, reloaded.tracks[0], sceneB.id).count, 1);
+  eq(reloaded.tracks[0].clip.count, 0);
+});
+
+test('Ungültige Szenen und Ketten werden abgelehnt', () => {
+  const track = createTrack({ name: 'Lead' });
+  const project = createProject({ tracks: [track] });
+
+  const noScene = serialize(project);
+  noScene.scenes = [];
+  noScene.activeSceneId = 'scn-Z';
+  const r1 = validateProject(noScene);
+  assert(!r1.ok, 'leere Szenenliste muss abgelehnt werden');
+
+  const unknownActive = serialize(project);
+  unknownActive.activeSceneId = 'scn-Z';
+  const r2 = validateProject(unknownActive);
+  assert(r2.ok, r2.errors.join(' | '));
+  eq(r2.project.activeSceneId, r2.project.scenes[0].id, 'unbekannte aktive Szene fällt auf die erste zurück');
+  assert(r2.warnings.some((w) => w.includes('activeSceneId')), r2.warnings.join(' | '));
+
+  const badChain = serialize(project);
+  badChain.song = { enabled: true, chain: ['scn-Z'] };
+  const r3 = validateProject(badChain);
+  assert(r3.ok, r3.errors.join(' | '));
+  eq([...r3.project.song.chain], [r3.project.activeSceneId], 'unbekannte Ketten-Schritte fliegen raus');
+  assert(r3.warnings.some((w) => w.includes('song.chain')), r3.warnings.join(' | '));
+
+  const tooMany = serialize(project);
+  tooMany.scenes = SCENE_NAMES.concat(['I']).map((name, i) => ({ id: `scn-${name}`, name }));
+  const r4 = validateProject(tooMany);
+  assert(!r4.ok, 'mehr als 8 Szenen müssen abgelehnt werden');
+
+  const missingClip = serialize(project);
+  delete missingClip.tracks[0].clips[project.activeSceneId];
+  const r5 = validateProject(missingClip);
+  assert(r5.ok, r5.errors.join(' | '));
+  eq(r5.project.tracks[0].clips[project.activeSceneId].count, 0, 'fehlender Szenen-Clip wird leer ergänzt');
+});
+
+test('v4 (takes) wird auf v5 (clips) migriert', () => {
+  const track = createTrack({ name: 'Lead' });
+  const project = createProject({ tracks: [track], bars: 1 });
+  const v4 = serialize(project);
+  v4.version = 4;
+  v4.tracks[0].takes = [[{ tick: 0, dur: 240, note: 64, vel: 0.8 }]];
+  delete v4.tracks[0].clips;
+  delete v4.scenes;
+  delete v4.activeSceneId;
+  delete v4.song;
+
+  const back = deserialize(JSON.stringify(v4));
+  assert(back.ok, back.errors.join(' | '));
+  eq(back.migratedFrom, 4);
+  eq(back.project.version, 5);
+  eq(back.project.scenes.length, 1);
+  eq(back.project.song.enabled, false);
+  eq([...back.project.song.chain], [back.project.activeSceneId]);
+  eq(back.project.tracks[0].clips[back.project.activeSceneId].count, 1);
+  eq(back.project.tracks[0].clip.count, 1);
+  eq(back.project.tracks[0].clip.events[0].note, 64);
 });

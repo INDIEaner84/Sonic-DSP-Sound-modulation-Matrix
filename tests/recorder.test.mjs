@@ -166,3 +166,12 @@ test('recordOutput meldet ungültige Dauer und fehlende Quelle', async () => {
     globalThis.MediaRecorder = previous;
   }
 });
+
+
+test('mixSeconds rechnet im Song-Modus die Ketten-Schritte mit', () => {
+  const project = { bpm: 120, bars: 2 }; // 4 s pro Loop
+  near(mixSeconds(project, 1, { stepsPerLoop: 3 }), 12 + MIX_TAIL_SECONDS, 1e-9);
+  near(mixSeconds(project, 2, { stepsPerLoop: 4 }), 32 + MIX_TAIL_SECONDS, 1e-9);
+  near(mixSeconds(project, 1, { stepsPerLoop: 0 }), 4 + MIX_TAIL_SECONDS, 1e-9, 'ungültig → ein Loop');
+  near(mixSeconds(project, 1, { stepsPerLoop: 999 }), 4 * 64 + MIX_TAIL_SECONDS, 1e-9, 'Kette bleibt begrenzt');
+});

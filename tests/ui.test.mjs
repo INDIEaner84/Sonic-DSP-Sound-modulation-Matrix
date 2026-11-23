@@ -406,6 +406,69 @@ if (!JSDOM) {
     await wait(10);
   });
 
+  test('Szenenleiste zeigt Szene A, legt B an und wechselt den Clip', async () => {
+    const chips = () => [...q('#sceneChips .scene-chip')];
+    eq(chips().length, 1, 'startet mit einer Szene');
+    eq(chips()[0].textContent, 'A');
+    assert(chips()[0].classList.contains('active'), 'Szene A muss aktiv sein');
+    assert(doc.getElementById('delSceneBtn').disabled, 'letzte Szene ist nicht löschbar');
+    eq(doc.getElementById('songEnabled').checked, false);
+    eq(doc.getElementById('songChain').value, 'A');
+
+    const sceneAId = project.activeSceneId;
+    const countA = project.tracks[0].clips[sceneAId].count;
+
+    click(doc.getElementById('addSceneBtn'));
+    await wait(20);
+    eq(chips().length, 2, 'zweite Szene fehlt');
+    eq(chips()[1].textContent, 'B');
+    const sceneBId = project.activeSceneId;
+    assert(sceneBId !== sceneAId, 'neue Szene muss aktiv sein');
+    assert(chips()[1].classList.contains('active'));
+    eq(project.song.chain.length, 2, 'neue Szene hängt sich an die Kette');
+    assert(project.tracks[0].clips[sceneBId], 'Clip für Szene B fehlt');
+    eq(project.tracks[0].clips[sceneBId].count, 0, 'Szene B startet leer');
+    eq(project.tracks[0].clips[sceneAId].count, countA, 'Szene A bleibt unberührt');
+    eq(doc.getElementById('delSceneBtn').disabled, false);
+    eq(doc.getElementById('songChain').value, 'A B');
+
+    click(chips()[0]);
+    await wait(20);
+    eq(project.activeSceneId, sceneAId, 'Klick auf Chip A muss umschalten');
+    assert(chips()[0].classList.contains('active'));
+    eq(project.tracks[0].clip, project.tracks[0].clips[sceneAId], 'Alias folgt der aktiven Szene');
+  });
+
+  test('Song-Modus: Schalter und Kette werden geprüft übernommen', async () => {
+    const songEl = doc.getElementById('songEnabled');
+    const chainEl = doc.getElementById('songChain');
+    const sceneIds = project.scenes.map((s) => s.id);
+
+    songEl.checked = true;
+    songEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await wait(10);
+    eq(project.song.enabled, true, 'Song-Modus muss aktiv sein');
+
+    chainEl.value = 'A B A';
+    chainEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await wait(10);
+    eq([...project.song.chain], [sceneIds[0], sceneIds[1], sceneIds[0]]);
+    eq(chainEl.value, 'A B A', 'Kette wird normalisiert angezeigt');
+
+    chainEl.value = 'A X';
+    chainEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await wait(10);
+    eq([...project.song.chain], [sceneIds[0], sceneIds[1], sceneIds[0]], 'ungültige Kette bleibt unverändert');
+    eq(chainEl.value, 'A B A', 'Eingabe wird zurückgesetzt');
+    assert(doc.getElementById('toast').textContent.includes('Unbekannte Szene'), 'Toast: ' + doc.getElementById('toast').textContent);
+
+    songEl.checked = false;
+    songEl.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await wait(10);
+    eq(project.song.enabled, false);
+    eq(errors, []);
+  });
+
   test('MIDI-Panel zeigt Zustand, Learn bleibt ohne Verbindung gesperrt', async () => {
     eq(doc.getElementById('midiStatus').textContent.length > 0, true);
     assert(doc.getElementById('midiLearnBtn').disabled, 'Learn muss ohne Verbindung gesperrt sein');

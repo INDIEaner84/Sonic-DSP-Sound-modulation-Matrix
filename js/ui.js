@@ -1085,6 +1085,7 @@ export function createTrackList(root, {
   onSend,
   onDrive,
   onInstrument,
+  getClipCount,
   onRename,
   onDelete,
 }) {
@@ -1135,7 +1136,7 @@ export function createTrackList(root, {
 
       const notes = document.createElement('span');
       notes.className = 'track-notes';
-      const count = track.clip ? track.clip.count : 0;
+      const count = getClipCount ? getClipCount(track) : 0;
       notes.textContent = count ? `${count} ♪` : '–';
 
       const mute = document.createElement('button');

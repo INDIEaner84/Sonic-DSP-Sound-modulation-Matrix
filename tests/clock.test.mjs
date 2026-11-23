@@ -2,7 +2,15 @@ import { test, eq, assert, setFile, near } from './harness.mjs';
 import { FakeAudioContext, stopTimer } from './support/fake-audio.mjs';
 import { Engine } from '../js/audio.js';
 import { Clock } from '../js/clock.js';
-import { createProject, createTrack, PPQ } from '../js/project.js';
+import {
+  createProject,
+  createTrack,
+  createScene,
+  ensureSceneClips,
+  clipOf,
+  activeClipOf,
+  PPQ,
+} from '../js/project.js';
 
 setFile('clock');
 
@@ -245,4 +253,95 @@ test('Position liefert Takt/Beat/Phase', async () => {
   eq(pos.bar, 1);
   eq(pos.beat, 3);
   near(pos.phase, 1.1 / clock.loopDur, 0.001);
+});
+
+
+test('Song-Kette plant je Loop den Clip der passenden Szene', async () => {
+  const { clock, engine, ctx, project, a, b } = await setup();
+  const sceneA = project.scenes[0];
+  const sceneB = createScene('B');
+  project.scenes.push(sceneB);
+  ensureSceneClips(a, project.scenes);
+  ensureSceneClips(b, project.scenes);
+  clipOf(project, a, sceneB.id).addEvents([{ tick: 0, dur: 240, note: 50, vel: 0.8 }]);
+  project.song.enabled = true;
+  project.song.chain = [sceneA.id, sceneB.id];
+
+  startManual(clock);
+  ctx.currentTime = clock.loopStart - 0.01;
+  clock.pump();
+  const loop0 = [...engine.voices].map((v) => v.note).sort((x, y) => x - y);
+  eq(loop0, [36, 64], 'Loop 0 spielt Szene A');
+
+  engine.voices.clear();
+  ctx.currentTime = clock.loopStart + clock.loopDur - 0.01;
+  clock.pump();
+  const loop1 = [...engine.voices].map((v) => v.note);
+  eq(loop1, [50], 'Loop 1 spielt nur den Clip aus Szene B');
+
+  engine.voices.clear();
+  ctx.currentTime = clock.loopStart + 2 * clock.loopDur - 0.01;
+  clock.pump();
+  const loop2 = [...engine.voices].map((v) => v.note).sort((x, y) => x - y);
+  eq(loop2, [36, 64], 'Loop 2 beginnt die Kette von vorn');
+});
+
+test('Szenenwechsel wirkt auf Planung, Aufnahme und Position', async () => {
+  const { clock, ctx, project, a } = await setup();
+  const sceneA = project.scenes[0];
+  const sceneB = createScene('B');
+  project.scenes.push(sceneB);
+  ensureSceneClips(a, project.scenes);
+
+  eq(clock.setScene(sceneB.id), true);
+  eq(project.activeSceneId, sceneB.id);
+  eq(clock.setScene(sceneB.id), false, 'gleiche Szene meldet keine Änderung');
+  eq(clock.setScene('scn-Z'), false, 'unbekannte Szene wird abgelehnt');
+  eq(project.activeSceneId, sceneB.id);
+
+  startManual(clock);
+  ctx.currentTime = clock.loopStart + 0.01;
+  const pos = clock.position();
+  eq(pos.sceneId, sceneB.id);
+  eq(pos.songStep, 0);
+
+  clock.start({ countIn: false, record: true });
+  if (clock._timer) {
+    clearInterval(clock._timer);
+    clock._timer = null;
+  }
+  ctx.currentTime = clock.loopStart + 0.01;
+  clock.noteOn(67, 0.9);
+  ctx.currentTime = clock.loopStart + 0.25;
+  clock.noteOff(67);
+  clock.stop();
+  eq(activeClipOf(project, a).count, 1, 'Aufnahme landet in der aktiven Szene B');
+  const recorded = activeClipOf(project, a).events.find((ev) => ev.note === 67);
+  assert(recorded, 'Note 67 fehlt in Szene B');
+  eq(clipOf(project, a, sceneA.id).count, 1, 'Szene A behält ihre Note');
+  eq(clipOf(project, a, sceneA.id).events[0].note, 36);
+});
+
+test('Song-Schalter und Kettenpflege', async () => {
+  const { clock, project } = await setup();
+  const sceneA = project.scenes[0];
+  const sceneB = createScene('B');
+  project.scenes.push(sceneB);
+
+  eq(clock.playlist, [sceneA.id], 'ohne Song nur die aktive Szene');
+  clock.setSong(true);
+  eq(project.song.enabled, true);
+
+  clock.setChain([sceneB.id, 'scn-Z', sceneA.id]);
+  eq([...project.song.chain], [sceneB.id, sceneA.id], 'unbekannte IDs werden gefiltert');
+  eq(clock.playlist, [sceneB.id, sceneA.id]);
+
+  clock.setChain([]);
+  eq([...project.song.chain], [project.activeSceneId], 'leere Kette fällt auf aktive Szene zurück');
+
+  clock.setSong(false);
+  eq(clock.playlist, [project.activeSceneId]);
+
+  clock.setChain(new Array(80).fill(sceneA.id));
+  eq(project.song.chain.length, 64, 'Kette ist auf 64 Schritte begrenzt');
 });

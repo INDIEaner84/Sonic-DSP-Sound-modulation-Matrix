@@ -7,10 +7,16 @@
 import { Clip } from './clip.js';
 import { buildPatch, getIn, PATCH_RANGES, PATCH_ENUMS, SOURCES, DESTS, DEFAULT_PATCH } from './state.js';
 
-export const PROJECT_VERSION = 4;
+export const PROJECT_VERSION = 5;
 
 /** Versionen, die beim Laden übernommen werden (ältere werden migriert). */
-export const SUPPORTED_VERSIONS = [1, 2, 3, 4];
+export const SUPPORTED_VERSIONS = [1, 2, 3, 4, 5];
+
+/** Szenen: mehrere Clips je Spur, die im Song-Modus in einer Kette laufen. */
+export const SCENE_NAMES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+/** Feste ID der ersten Szene – erlaubt Clips schon vor dem Projektaufbau. */
+export const DEFAULT_SCENE_ID = 'scn-A';
+export const SONG_DEFAULTS = { enabled: false, chain: [] };
 
 /** Instrumenttypen einer Spur. `synth` nutzt den Patch, `piano`/`drums` eigene Stimmen. */
 export const INSTRUMENTS = [
@@ -198,6 +204,9 @@ export const LIMITS = {
   maxReverbSize: 8,
   maxMidiBinds: 32,
   maxDrive: 1,
+  maxScenes: 8,
+  maxChain: 64,
+  maxSceneName: 8,
 };
 
 export const QUANTIZE_STEPS = [0, 60, 120, 240]; // OFF, 1/32, 1/16, 1/8 (PPQ 480)
@@ -215,6 +224,7 @@ const KNOWN_TRACK_KEYS = new Set([
   'gain',
   'sends',
   'insert',
+  'clips',
   'takes',
 ]);
 
@@ -252,7 +262,7 @@ export function createTrack({
   insert,
   instrument = 'synth',
 } = {}) {
-  return {
+  const track = {
     id: id || newId('trk'),
     name: name || 'Track',
     patchName,
@@ -263,14 +273,58 @@ export function createTrack({
     instrument: INSTRUMENT_IDS.includes(instrument) ? instrument : 'synth',
     sends: { ...SEND_DEFAULTS, ...(sends || {}) },
     insert: { ...INSERT_DEFAULTS, ...(insert || {}) },
-    clip: new Clip(),
+    clips: { [DEFAULT_SCENE_ID]: new Clip() },
   };
+  attachClipAlias(track);
+  return track;
+}
+
+/**
+ * `track.clip` ist ein abgeleiteter Zugriff auf den Clip der aktiven Szene –
+ * gespeichert wird ausschließlich `clips` (eine Wahrheit, zwei Sichten).
+ */
+function attachClipAlias(track) {
+  Object.defineProperty(track, 'clip', {
+    get() {
+      const sceneId = (track._project && track._project.activeSceneId) || DEFAULT_SCENE_ID;
+      if (!track.clips[sceneId]) track.clips[sceneId] = new Clip();
+      return track.clips[sceneId];
+    },
+    enumerable: false,
+    configurable: true,
+  });
+  return track;
+}
+
+export function createScene(name = 'A', id) {
+  return { id: id || newId('scn'), name: String(name).slice(0, LIMITS.maxSceneName) || 'A' };
 }
 
 export function createProject(overrides = {}) {
   const track = overrides.tracks && overrides.tracks.length ? overrides.tracks[0] : createTrack({ name: 'Track 1' });
   const tracks = overrides.tracks && overrides.tracks.length ? overrides.tracks : [track];
-  return {
+
+  const scenes =
+    Array.isArray(overrides.scenes) && overrides.scenes.length
+      ? overrides.scenes.map((scene, i) => createScene(scene.name || SCENE_NAMES[i] || 'A', scene.id))
+      : [createScene('A', DEFAULT_SCENE_ID)];
+  for (const t of tracks) {
+    /* Vor dem Projekt angelegte Clips (Standard-Szene) in die erste Szene übernehmen. */
+    const legacy = t.clips ? t.clips[DEFAULT_SCENE_ID] : null;
+    if (legacy && !scenes.some((scene) => scene.id === DEFAULT_SCENE_ID)) {
+      ensureSceneClips(t, scenes);
+      if ((legacy.count || legacy.takeCount) && scenes.length) t.clips[scenes[0].id] = legacy;
+    } else {
+      ensureSceneClips(t, scenes);
+    }
+  }
+  const activeSceneId = scenes.some((s) => s.id === overrides.activeSceneId)
+    ? overrides.activeSceneId
+    : scenes[0].id;
+  const chainInput = overrides.song && Array.isArray(overrides.song.chain) ? overrides.song.chain : [];
+  const chain = chainInput.filter((id) => scenes.some((s) => s.id === id));
+
+  const project = {
     version: PROJECT_VERSION,
     name: overrides.name || 'Neues Projekt',
     bpm: overrides.bpm || 120,
@@ -281,6 +335,12 @@ export function createProject(overrides = {}) {
     master: overrides.master != null ? overrides.master : 0.72,
     modWheel: overrides.modWheel || 0,
     activeTrackId: overrides.activeTrackId || tracks[0].id,
+    scenes,
+    activeSceneId,
+    song: {
+      enabled: overrides.song ? overrides.song.enabled === true : false,
+      chain: chain.length ? chain : [activeSceneId],
+    },
     fx: { ...FX_DEFAULTS, ...(overrides.fx || {}) },
     midi: {
       binds: Array.isArray(overrides.midi && overrides.midi.binds)
@@ -289,6 +349,8 @@ export function createProject(overrides = {}) {
     },
     tracks,
   };
+  for (const t of tracks) t._project = project;
+  return project;
 }
 
 /** Delay-Zeit in Sekunden aus Raster und Tempo (eine Quelle für Engine und UI). */
@@ -310,6 +372,64 @@ export function loopTicksOf(project) {
 
 export function activeTrackOf(project) {
   return project.tracks.find((t) => t.id === project.activeTrackId) || project.tracks[0] || null;
+}
+
+/* --------------------------------------------------------------- Szenen */
+
+export function ensureSceneClips(track, scenes) {
+  if (!track.clips || typeof track.clips !== 'object') track.clips = {};
+  for (const scene of scenes) {
+    if (!track.clips[scene.id]) track.clips[scene.id] = new Clip();
+  }
+  return track;
+}
+
+export function sceneById(project, sceneId) {
+  return (project.scenes || []).find((s) => s.id === sceneId) || null;
+}
+
+export function activeSceneOf(project) {
+  return sceneById(project, project.activeSceneId) || (project.scenes || [])[0] || null;
+}
+
+/** Clip einer Spur in einer bestimmten Szene (nie null, legt fehlende an). */
+export function clipOf(project, track, sceneId = project.activeSceneId) {
+  if (!track) return null;
+  if (!track.clips) track.clips = {};
+  if (!track.clips[sceneId]) {
+    ensureSceneClips(track, project.scenes || []);
+  }
+  return track.clips[sceneId] || null;
+}
+
+export function activeClipOf(project, track) {
+  return clipOf(project, track, project.activeSceneId);
+}
+
+export function allClipsOf(project) {
+  const out = [];
+  for (const track of project.tracks) {
+    for (const clip of Object.values(track.clips || {})) if (clip) out.push(clip);
+  }
+  return out;
+}
+
+/** Welche Szene spielt im Loop Nr. `loopIndex` (Song-Kette oder aktive Szene)? */
+export function sceneIdAtLoop(project, loopIndex) {
+  const song = project.song;
+  if (song && song.enabled && Array.isArray(song.chain) && song.chain.length) {
+    const len = song.chain.length;
+    const idx = ((Math.floor(loopIndex) % len) + len) % len;
+    return song.chain[idx];
+  }
+  return project.activeSceneId;
+}
+
+/** Szenen in Abspielreihenfolge (eine Szene oder die ganze Kette). */
+export function playOrder(project) {
+  const song = project.song;
+  if (song && song.enabled && Array.isArray(song.chain) && song.chain.length) return [...song.chain];
+  return [project.activeSceneId];
 }
 
 /* ---------------------------------------------------------------- Validierung */
@@ -490,6 +610,77 @@ function validateSends(raw, path, errors, warnings) {
   return sends;
 }
 
+function validateScenes(raw, errors, warnings) {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    errors.push('scenes: mindestens eine Szene erwartet');
+    return [];
+  }
+  if (raw.length > LIMITS.maxScenes) {
+    errors.push(`scenes: mehr als ${LIMITS.maxScenes} Szenen`);
+    return [];
+  }
+  const out = [];
+  const ids = new Set();
+  raw.forEach((scene, i) => {
+    const at = `scenes[${i}]`;
+    if (!scene || typeof scene !== 'object' || Array.isArray(scene)) {
+      errors.push(`${at}: Objekt erwartet`);
+      return;
+    }
+    let id = typeof scene.id === 'string' && scene.id ? scene.id.slice(0, 64) : newId('scn');
+    if (ids.has(id)) {
+      warnings.push(`${at}.id: doppelt, neue ID vergeben`);
+      id = newId('scn');
+    }
+    ids.add(id);
+    const name =
+      (typeof scene.name === 'string' ? scene.name.trim() : '').slice(0, LIMITS.maxSceneName) || SCENE_NAMES[i] || 'A';
+    out.push({ id, name });
+  });
+  const names = new Set();
+  out.forEach((scene, i) => {
+    if (names.has(scene.name)) {
+      warnings.push(`scenes[${i}].name: "${scene.name}" doppelt, umbenannt`);
+      scene.name = SCENE_NAMES[i] || `S${i + 1}`;
+    }
+    names.add(scene.name);
+  });
+  return out;
+}
+
+function validateSong(raw, scenes, activeSceneId, errors, warnings) {
+  const song = { enabled: false, chain: [activeSceneId] };
+  if (raw === undefined) return song;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push('song: Objekt erwartet');
+    return song;
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== 'enabled' && key !== 'chain') warnings.push(`song.${key}: unbekanntes Feld ignoriert`);
+  }
+  song.enabled = raw.enabled === true;
+  if (raw.chain === undefined) return song;
+  if (!Array.isArray(raw.chain)) {
+    errors.push('song.chain: Array aus Szenen-IDs erwartet');
+    return song;
+  }
+  if (raw.chain.length > LIMITS.maxChain) {
+    errors.push(`song.chain: mehr als ${LIMITS.maxChain} Schritte`);
+    return song;
+  }
+  const ids = new Set(scenes.map((s) => s.id));
+  const chain = [];
+  raw.chain.forEach((id, i) => {
+    if (!ids.has(id)) {
+      warnings.push(`song.chain[${i}]: unbekannte Szene "${id}" entfernt`);
+      return;
+    }
+    chain.push(id);
+  });
+  song.chain = chain.length ? chain : [activeSceneId];
+  return song;
+}
+
 function validateMidi(raw, errors, warnings) {
   const midi = { binds: [] };
   if (raw === undefined) return midi;
@@ -612,6 +803,21 @@ function migrateV1toV2(raw) {
   return out;
 }
 
+function migrateV4toV5(raw) {
+  const out = structuredClone(raw);
+  out.version = 5;
+  const sceneId = 'scn-A';
+  out.scenes = [{ id: sceneId, name: 'A' }];
+  out.activeSceneId = sceneId;
+  out.song = { enabled: false, chain: [sceneId] };
+  out.tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).map((t) => {
+    if (!t || typeof t !== 'object') return t;
+    const { takes, ...rest } = t;
+    return { ...rest, clips: { [sceneId]: Array.isArray(takes) ? takes : [] } };
+  });
+  return out;
+}
+
 function migrateV3toV4(raw) {
   const out = structuredClone(raw);
   out.version = 4;
@@ -645,6 +851,7 @@ export function migrate(raw) {
   if (out.version === 1) out = migrateV1toV2(out);
   if (out.version === 2) out = migrateV2toV3(out);
   if (out.version === 3) out = migrateV3toV4(out);
+  if (out.version === 4) out = migrateV4toV5(out);
   return out;
 }
 
@@ -674,7 +881,8 @@ export function validateProject(raw) {
 
   const KNOWN_PROJECT_KEYS = new Set([
     'version', 'name', 'bpm', 'bars', 'quantizeStep', 'swing', 'metronome',
-    'master', 'modWheel', 'activeTrackId', 'fx', 'midi', 'tracks',
+    'master', 'modWheel', 'activeTrackId', 'scenes', 'activeSceneId', 'song',
+    'fx', 'midi', 'tracks',
   ]);
   for (const key of Object.keys(data)) {
     if (!KNOWN_PROJECT_KEYS.has(key)) warnings.push(`${key}: unbekanntes Feld ignoriert`);
@@ -699,6 +907,14 @@ export function validateProject(raw) {
   if (modWheel < 0 || modWheel > 1) errors.push(`modWheel: ${data.modWheel} außerhalb 0…1`);
 
   const loopTicks = (isNum(data.bars) ? bars : 4) * BEATS_PER_BAR * PPQ;
+
+  const scenes = validateScenes(data.scenes, errors, warnings);
+  let activeSceneId = data.activeSceneId;
+  if (!scenes.some((s) => s.id === activeSceneId)) {
+    if (scenes.length) warnings.push('activeSceneId: unbekannt, erste Szene gewählt');
+    activeSceneId = scenes.length ? scenes[0].id : null;
+  }
+  const song = validateSong(data.song, scenes, activeSceneId, errors, warnings);
 
   if (!Array.isArray(data.tracks) || data.tracks.length === 0) {
     errors.push('tracks: mindestens eine Spur erwartet');
@@ -739,8 +955,24 @@ export function validateProject(raw) {
       if (!INSTRUMENT_IDS.includes(instrument)) {
         errors.push(`${at}.instrument: "${instrument}" nicht erlaubt (${INSTRUMENT_IDS.join(' / ')})`);
       }
-      const takes = validateEvents(rt.takes, `${at}.takes`, loopTicks, errors);
-      const clip = Clip.fromTakes(takes);
+      const clips = {};
+      const knownSceneIds = new Set(scenes.map((sc) => sc.id));
+      if (rt.clips !== undefined) {
+        if (!rt.clips || typeof rt.clips !== 'object' || Array.isArray(rt.clips)) {
+          errors.push(`${at}.clips: Objekt erwartet`);
+        } else {
+          for (const [sceneId, takes] of Object.entries(rt.clips)) {
+            if (!knownSceneIds.has(sceneId)) {
+              warnings.push(`${at}.clips["${sceneId}"]: unbekannte Szene ignoriert`);
+              continue;
+            }
+            clips[sceneId] = Clip.fromTakes(validateEvents(takes, `${at}.clips["${sceneId}"]`, loopTicks, errors));
+          }
+        }
+      }
+      for (const scene of scenes) {
+        if (!clips[scene.id]) clips[scene.id] = new Clip();
+      }
 
       if (patch) {
         tracks.push({
@@ -754,7 +986,7 @@ export function validateProject(raw) {
           gain,
           sends,
           insert,
-          clip,
+          clips,
         });
       }
     });
@@ -771,7 +1003,7 @@ export function validateProject(raw) {
 
   if (errors.length) return { ok: false, project: null, errors, warnings };
 
-  return {
+  const project = {
     ok: true,
     errors,
     warnings,
@@ -786,12 +1018,20 @@ export function validateProject(raw) {
       master,
       modWheel,
       activeTrackId,
+      scenes,
+      activeSceneId,
+      song,
       fx,
       midi,
       tracks,
     },
     migratedFrom,
   };
+  for (const t of project.project.tracks) {
+    attachClipAlias(t);
+    t._project = project.project;
+  }
+  return project;
 }
 
 /* -------------------------------------------------------------- (De)Serialisierung */
@@ -810,6 +1050,12 @@ export function serialize(project) {
     master: project.master,
     modWheel: project.modWheel,
     activeTrackId: project.activeTrackId,
+    scenes: (project.scenes || []).map((s) => ({ id: s.id, name: s.name })),
+    activeSceneId: project.activeSceneId,
+    song: {
+      enabled: !!(project.song && project.song.enabled),
+      chain: (project.song && Array.isArray(project.song.chain) ? project.song.chain : []).slice(0, LIMITS.maxChain),
+    },
     tracks: project.tracks.map((t) => ({
       id: t.id,
       name: t.name,
@@ -821,7 +1067,12 @@ export function serialize(project) {
       sends: { ...SEND_DEFAULTS, ...(t.sends || {}) },
       insert: { ...INSERT_DEFAULTS, ...(t.insert || {}) },
       patch: structuredClone(t.patch),
-      takes: t.clip ? t.clip.toTakes() : [],
+      clips: Object.fromEntries(
+        (project.scenes || []).map((scene) => {
+          const clip = t.clips ? t.clips[scene.id] : null;
+          return [scene.id, clip ? clip.toTakes() : []];
+        })
+      ),
     })),
   };
 }
