@@ -272,7 +272,8 @@ komplette UI-Fluss (Spur anlegen, umbenennen, aufnehmen, exportieren, importiere
 
 Details und Begründungen: `docs/KOMPONIEREN-KONZEPT.md`, offene Punkte und
 Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`, Lizenz- und Verkaufsfragen:
-`docs/LIZENZEN.md`.
+`docs/LIZENZEN.md`. Aktueller Arbeitsstand, Prüfungen und Wiederaufnahme:
+`docs/UEBERGABE.md`.
 
 ## Lizenzen
 
