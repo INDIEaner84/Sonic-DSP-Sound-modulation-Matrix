@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sonic DSP — Modulation Matrix</title>
+    <meta name="description" content="Polyphoner Web-Audio-Synthesizer mit Modulationsmatrix, Loop-Recorder und Transport." />
+    <link rel="stylesheet" href="css/style.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230d1116'/%3E%3Cpath d='M6 20 L11 10 L16 22 L21 8 L26 18' stroke='%23ffb245' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="brand-text">
+            <h1>SONIC <em>DSP</em></h1>
+            <p>Modulation Matrix <span class="sep">/</span> Loop Recorder</p>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <label class="preset">
+            <span class="preset-label">Patch</span>
+            <select id="presetSelect" aria-label="Preset wählen"></select>
+          </label>
+          <div class="master-slot" id="masterKnobSlot"></div>
+          <button class="btn power" id="powerBtn" type="button">
+            <span class="led" aria-hidden="true"></span>
+            <span id="powerLabel">Audio Start</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- --------------------------------------------------------- Transport -->
+      <section class="transport" id="transport" aria-label="Transport">
+        <div class="tp-left">
+          <button class="btn rec" id="recBtn" type="button" title="Aufnahme starten (mit Count-in)">
+            <span class="rec-dot" aria-hidden="true"></span>
+            <span id="recLabel">Rec</span>
+          </button>
+          <button class="btn play" id="playBtn" type="button" title="Start / Stop">
+            <span class="play-icon" aria-hidden="true"></span>
+            <span id="playLabel">Play</span>
+          </button>
+        </div>
+
+        <div class="tp-group">
+          <span class="tp-label">Loop</span>
+          <div id="segLoop"></div>
+        </div>
+
+        <div class="tp-group">
+          <span class="tp-label">Quantize</span>
+          <div id="segQuant"></div>
+        </div>
+
+        <div class="tp-group tp-swing">
+          <div id="swingSlider"></div>
+        </div>
+
+        <div class="tp-group">
+          <span class="tp-label">Tempo</span>
+          <div class="bpm">
+            <button class="btn step" id="bpmDown" type="button" aria-label="Tempo langsamer">−</button>
+            <span class="bpm-val" id="bpmVal">120</span>
+            <span class="bpm-unit">BPM</span>
+            <button class="btn step" id="bpmUp" type="button" aria-label="Tempo schneller">+</button>
+          </div>
+        </div>
+
+        <div class="tp-group tp-actions">
+          <button class="btn ghost" id="metroBtn" type="button" title="Metronom">Metro</button>
+          <button class="btn ghost" id="undoBtn" type="button" title="Letzten Take verwerfen">Undo</button>
+          <button class="btn ghost" id="clearClipBtn" type="button" title="Loop leeren">Clear Clip</button>
+        </div>
+
+        <div class="tp-position">
+          <span class="pos" id="posDisplay">1.1.1</span>
+          <div class="loop-progress"><i id="loopProgress"></i></div>
+          <span class="take-info" id="takeInfo">leer</span>
+        </div>
+      </section>
+
+      <main class="rack">
+        <!-- ---------------------------------------------------------- links -->
+        <div class="col">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Oscillators</h2>
+              <span class="tag">2 × VOICE</span>
+            </div>
+            <div class="panel-body">
+              <div class="osc">
+                <div class="osc-head">
+                  <span class="chip">OSC 1</span>
+                  <div id="segOsc1"></div>
+                </div>
+                <div class="knobs" id="knobsOsc1"></div>
+              </div>
+              <div class="osc">
+                <div class="osc-head">
+                  <span class="chip">OSC 2</span>
+                  <div id="segOsc2"></div>
+                </div>
+                <div class="knobs" id="knobsOsc2"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>LFO</h2>
+              <span class="tag">MOD SOURCES</span>
+            </div>
+            <div class="panel-body">
+              <div class="lfo">
+                <div class="lfo-head">
+                  <span class="chip">LFO 1</span>
+                  <canvas class="lfo-scope" id="lfo1Scope"></canvas>
+                </div>
+                <div class="lfo-controls">
+                  <div id="segLfo1"></div>
+                  <div class="knobs" id="knobsLfo1"></div>
+                </div>
+              </div>
+              <div class="lfo">
+                <div class="lfo-head">
+                  <span class="chip">LFO 2</span>
+                  <canvas class="lfo-scope" id="lfo2Scope"></canvas>
+                </div>
+                <div class="lfo-controls">
+                  <div id="segLfo2"></div>
+                  <div class="knobs" id="knobsLfo2"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Performance</h2>
+              <span class="tag">PLAY</span>
+            </div>
+            <div class="panel-body perf">
+              <div class="wheel-wrap">
+                <div class="wheel" id="modWheel">
+                  <div class="wheel-fill"></div>
+                  <div class="wheel-handle"></div>
+                </div>
+                <span class="wheel-label">MOD<br />WHEEL</span>
+              </div>
+              <div class="knobs" id="knobsPerf"></div>
+            </div>
+            <p class="hint">Ziehen = Wert · Shift = fein · Doppelklick = Reset</p>
+          </section>
+        </div>
+
+        <!-- --------------------------------------------------------- mitte -->
+        <div class="col col-mid">
+          <section class="panel panel-tracks">
+            <div class="panel-head">
+              <h2>Tracks</h2>
+              <div class="panel-actions">
+                <span class="tag" id="trackTag">1 / 8</span>
+                <button class="btn ghost" id="addTrackBtn" type="button">+ Track</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="scene-bar">
+                <span class="scene-label">SZENE</span>
+                <div id="sceneChips" class="scene-chips"></div>
+                <button class="btn ghost scene-add" id="addSceneBtn" type="button" title="Neue Szene anlegen">+</button>
+                <button class="btn ghost scene-del" id="delSceneBtn" type="button" title="Aktive Szene löschen">−</button>
+                <label class="scene-song">
+                  <input type="checkbox" id="songEnabled" />
+                  <span>SONG</span>
+                </label>
+                <input
+                  id="songChain"
+                  class="song-chain"
+                  type="text"
+                  maxlength="64"
+                  aria-label="Song-Kette (z. B. A A B)"
+                  placeholder="A A B"
+                />
+              </div>
+              <div id="tracks"></div>
+              <div class="fx-strip">
+                <div class="fx-head">
+                  <h3>FX</h3>
+                  <span class="fx-hint">Sends pro Spur: DLY / REV</span>
+                </div>
+                <div class="fx-row">
+                  <label class="fx-select">
+                    <span>DELAY</span>
+                    <select id="fxDivision" class="mini-select" aria-label="Delay-Raster"></select>
+                  </label>
+                  <div id="fxKnobs" class="fx-knobs"></div>
+                </div>
+              </div>
+              <div class="project-bar">
+                <input
+                  id="projectName"
+                  class="proj-name"
+                  type="text"
+                  maxlength="40"
+                  aria-label="Projektname"
+                  placeholder="Projektname"
+                />
+                <div class="proj-actions">
+                  <button class="btn ghost" id="saveBtn" type="button" title="Projekt als JSON herunterladen">Save JSON</button>
+                  <button class="btn ghost" id="loadBtn" type="button" title="Projekt aus JSON laden">Load</button>
+                  <button class="btn ghost" id="newBtn" type="button" title="Neues Projekt">New</button>
+                  <span class="proj-sep" aria-hidden="true"></span>
+                  <button class="btn ghost" id="midiExportBtn" type="button" title="Als MIDI-Datei exportieren">MIDI ⤓</button>
+                  <select id="midiRepeats" class="mini-select" aria-label="Loop-Wiederholungen im MIDI-Export">
+                    <option value="1">1×</option>
+                    <option value="2">2×</option>
+                    <option value="4">4×</option>
+                  </select>
+                  <button class="btn ghost" id="midiImportBtn" type="button" title="MIDI-Datei importieren">MIDI ⤒</button>
+                  <span class="proj-sep" aria-hidden="true"></span>
+                  <button class="btn ghost" id="bounceBtn" type="button" title="Mix in Echtzeit aufnehmen und als WAV speichern">Mix ⤓ WAV</button>
+                  <select id="bounceLoops" class="mini-select" aria-label="Loops für den Mitschnitt">
+                    <option value="1">1 Loop</option>
+                    <option value="2" selected>2 Loops</option>
+                    <option value="4">4 Loops</option>
+                  </select>
+                </div>
+                <span class="save-state" id="saveState">Autosave</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel-matrix">
+            <div class="panel-head">
+              <h2>Modulation Matrix</h2>
+              <div class="panel-actions">
+                <button class="btn ghost" id="randBtn" type="button">Random</button>
+                <button class="btn ghost" id="clearBtn" type="button">Clear</button>
+                <button class="btn ghost" id="panicBtn" type="button">Panic</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="matrix" id="matrix"></div>
+              <p class="hint">
+                Zelle vertikal ziehen = Betrag −100…+100 · Wheel/↑↓ = fein · Doppelklick = 0 ·
+                Quelle × Ziel
+              </p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Output</h2>
+              <span class="tag">SCOPE / METER</span>
+            </div>
+            <div class="panel-body scope-body">
+              <canvas class="scope" id="scope"></canvas>
+              <div class="meter"><div class="meter-fill" id="meterFill"></div></div>
+              <div class="scope-foot">
+                <span id="scopeState">AUDIO OFF</span>
+                <span id="scopeDb">−∞ dB</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- -------------------------------------------------------- rechts -->
+        <div class="col">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Filter</h2>
+              <span class="tag">24 dB</span>
+            </div>
+            <div class="panel-body">
+              <div class="osc-head">
+                <span class="chip">VCF</span>
+                <div id="segFilter"></div>
+              </div>
+              <div class="knobs" id="knobsFilter"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Amp Envelope</h2>
+              <span class="tag">ENV 1</span>
+            </div>
+            <div class="panel-body">
+              <div class="knobs env-knobs" id="knobsAmpEnv"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Mod Envelope</h2>
+              <span class="tag">ENV 2</span>
+            </div>
+            <div class="panel-body">
+              <div class="knobs env-knobs" id="knobsModEnv"></div>
+            </div>
+          </section>
+
+          <section class="panel panel-pads">
+            <div class="panel-head">
+              <h2>Pads</h2>
+              <span class="tag" id="padTag">DRUMS</span>
+            </div>
+            <div class="panel-body">
+              <div id="pads"></div>
+              <p class="hint">
+                Pad = Note 36–49 der aktiven Spur · Instrument „DRUMS“ spielt das Kit ·
+                MIDI-Noten schlagen dieselben Pads an
+              </p>
+            </div>
+          </section>
+
+          <section class="panel panel-sf2">
+            <div class="panel-head">
+              <h2>SF2</h2>
+              <span class="tag" id="sf2Tag">KEINE DATEI</span>
+            </div>
+            <div class="panel-body">
+              <div class="sf2-row">
+                <input type="file" id="sf2File" accept=".sf2" class="sf2-file" aria-label="SF2-Datei wählen" />
+                <button class="btn ghost" id="sf2LoadBtn" type="button">Datei wählen</button>
+              </div>
+              <label class="sf2-preset">
+                <span>PRESET</span>
+                <select id="sf2Preset" class="mini-select" aria-label="SF2-Preset der aktiven Spur" disabled></select>
+              </label>
+              <div class="sf2-info" id="sf2Info">keine Bank geladen</div>
+              <p class="hint">
+                Eigene .sf2-Datei laden (z. B. CC0-Soundfont) · die Datei bleibt lokal, im
+                Projekt stehen nur Preset-Name und Programm · Instrument „SF2“ nutzt sie
+              </p>
+            </div>
+          </section>
+
+          <section class="panel panel-midi">
+            <div class="panel-head">
+              <h2>MIDI In</h2>
+              <div class="panel-actions">
+                <span class="tag" id="midiStatus">AUS</span>
+                <button class="btn ghost" id="midiConnectBtn" type="button">Verbinden</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="midi-devices" id="midiDevices"></div>
+              <div class="midi-learn">
+                <label class="midi-learn-label">
+                  <span>LERNEN</span>
+                  <select id="midiTarget" class="mini-select" aria-label="MIDI-Ziel"></select>
+                </label>
+                <button class="btn ghost" id="midiLearnBtn" type="button" disabled>CC anlernen</button>
+              </div>
+              <div class="midi-binds" id="midiBinds"></div>
+              <div class="midi-monitor" id="midiMonitor">noch keine Nachricht</div>
+              <p class="hint">
+                Noten spielen die aktive Spur · CCs steuern die gewählten Ziele ·
+                Nektar Impact: Pads senden Noten (Kanal 10), Transporttasten per
+                „CC anlernen“ selbst belegen
+              </p>
+            </div>
+          </section>
+
+          <section class="panel panel-diag">
+            <div class="panel-head">
+              <h2>Status</h2>
+              <span class="tag" id="diagTag">SYSTEM</span>
+            </div>
+            <div class="panel-body">
+              <div class="diag" id="diag"></div>
+              <p class="hint">Für die Browser-Abnahme: Audio, MIDI, Mitschnitt, Autosave</p>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <footer class="keybed">
+        <div class="clip-strip">
+          <canvas id="clipCanvas" aria-label="Loop-Inhalt"></canvas>
+          <span class="clip-badge" id="clipBadge">Loop 4 Bars · leer</span>
+        </div>
+        <div class="keybed-row">
+          <div class="keybed-side">
+            <div class="octave">
+              <button class="btn oct" id="octDown" type="button" aria-label="Oktave tiefer">−</button>
+              <span id="octLabel">C3 – B4</span>
+              <button class="btn oct" id="octUp" type="button" aria-label="Oktave höher">+</button>
+            </div>
+            <p class="hint">Rechner-Tasten: A W S E D F T G Y H U J K · Z / X = Oktave<br />REC drücken und drüberspielen = Overdub auf der aktiven Spur</p>
+          </div>
+          <div class="keys" id="keys"></div>
+        </div>
+      </footer>
+    </div>
+
+    <input type="file" id="fileInput" accept=".json,application/json" hidden />
+    <input type="file" id="midiInput" accept=".mid,.midi,audio/midi" hidden />
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <div class="gate" id="gate">
+      <div class="gate-card">
+        <span class="gate-badge">Web Audio Engine</span>
+        <h2>Bereit für Modulation</h2>
+        <p>
+          Der Browser erlaubt Audio erst nach einer Interaktion. Starte die Engine, dann spiele
+          mit dem Keyboard oder den Tasten A – K. Mit <strong>REC</strong> nimmt der Loop
+          dein Spiel auf, <strong>Overdub</strong> legt jede weitere Runde eine Schicht drauf.
+        </p>
+        <button class="btn big" id="gateBtn" type="button">AUDIO STARTEN</button>
+        <p class="hint">Kopfhörer oder Monitore empfohlen · Mod-Wheel mit der Maus ziehen</p>
+      </div>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
