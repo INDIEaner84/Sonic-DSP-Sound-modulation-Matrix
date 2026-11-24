@@ -32,6 +32,7 @@ import {
   playOrder,
   sceneIdAtLoop,
   SCENE_NAMES,
+  SAMPLE_DEFAULTS,
 } from '../js/project.js';
 import { buildPatch } from '../js/state.js';
 
@@ -482,7 +483,7 @@ test('Szenen und Song überleben Serialisierung und Validierung', () => {
   clipOf(project, track, sceneB.id).addEvents([{ tick: 0, dur: 240, note: 62, vel: 0.5 }]);
 
   const raw = serialize(project);
-  eq(raw.version, 5);
+  eq(raw.version, PROJECT_VERSION);
   eq(raw.scenes.length, 2);
   eq(raw.tracks[0].takes, undefined, 'v5 schreibt kein takes-Feld mehr');
   assert(Array.isArray(raw.tracks[0].clips[sceneB.id]));
@@ -546,11 +547,56 @@ test('v4 (takes) wird auf v5 (clips) migriert', () => {
   const back = deserialize(JSON.stringify(v4));
   assert(back.ok, back.errors.join(' | '));
   eq(back.migratedFrom, 4);
-  eq(back.project.version, 5);
+  eq(back.project.version, PROJECT_VERSION);
   eq(back.project.scenes.length, 1);
   eq(back.project.song.enabled, false);
   eq([...back.project.song.chain], [back.project.activeSceneId]);
   eq(back.project.tracks[0].clips[back.project.activeSceneId].count, 1);
   eq(back.project.tracks[0].clip.count, 1);
   eq(back.project.tracks[0].clip.events[0].note, 64);
+});
+
+
+test('SF2-Sample-Referenz wird gespeichert, geprüft und migriert', () => {
+  assert(INSTRUMENTS.some((i) => i.id === 'sf2'), 'SF2 muss ein wählbares Instrument sein');
+
+  const track = createTrack({ name: 'Strings', instrument: 'sf2' });
+  eq(track.sample, { ...SAMPLE_DEFAULTS }, 'neue Spur startet ohne Sample-Referenz');
+  track.sample = { preset: 'Strings', name: 'MeinFont.sf2', program: 48, bank: 0 };
+
+  const project = createProject({ tracks: [track] });
+  const raw = serialize(project);
+  eq(raw.tracks[0].instrument, 'sf2');
+  eq(raw.tracks[0].sample.preset, 'Strings');
+  eq(raw.tracks[0].sample.program, 48);
+
+  const back = deserialize(JSON.stringify(raw));
+  assert(back.ok, back.errors.join(' | '));
+  eq(back.project.tracks[0].sample.preset, 'Strings');
+  eq(back.project.tracks[0].sample.name, 'MeinFont.sf2');
+  eq(back.project.tracks[0].instrument, 'sf2');
+
+  const bad = serialize(project);
+  bad.tracks[0].sample.program = 200;
+  const badResult = validateProject(bad);
+  assert(!badResult.ok, 'Programm außerhalb 0…127 muss abgelehnt werden');
+  assert(badResult.errors.join(' ').includes('sample.program'), badResult.errors.join(' | '));
+
+  const unknown = serialize(project);
+  unknown.tracks[0].sample.attack = 1;
+  const warned = validateProject(unknown);
+  assert(warned.ok, warned.errors.join(' | '));
+  assert(warned.warnings.some((w) => w.includes('sample.attack')), warned.warnings.join(' | '));
+
+  /* v5 → v6: Sample-Feld wird additiv ergänzt, Szenen bleiben. */
+  const v5 = serialize(project);
+  v5.version = 5;
+  delete v5.tracks[0].sample;
+  const migrated = deserialize(JSON.stringify(v5));
+  assert(migrated.ok, migrated.errors.join(' | '));
+  eq(migrated.migratedFrom, 5);
+  eq(migrated.project.version, PROJECT_VERSION);
+  eq(migrated.project.tracks[0].sample, { ...SAMPLE_DEFAULTS });
+  eq(migrated.project.tracks[0].instrument, 'sf2', 'Instrument bleibt erhalten');
+  eq(migrated.project.scenes.length, 1);
 });

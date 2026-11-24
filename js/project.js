@@ -7,22 +7,25 @@
 import { Clip } from './clip.js';
 import { buildPatch, getIn, PATCH_RANGES, PATCH_ENUMS, SOURCES, DESTS, DEFAULT_PATCH } from './state.js';
 
-export const PROJECT_VERSION = 5;
+export const PROJECT_VERSION = 6;
 
 /** Versionen, die beim Laden übernommen werden (ältere werden migriert). */
-export const SUPPORTED_VERSIONS = [1, 2, 3, 4, 5];
+export const SUPPORTED_VERSIONS = [1, 2, 3, 4, 5, 6];
 
 /** Szenen: mehrere Clips je Spur, die im Song-Modus in einer Kette laufen. */
 export const SCENE_NAMES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 /** Feste ID der ersten Szene – erlaubt Clips schon vor dem Projektaufbau. */
 export const DEFAULT_SCENE_ID = 'scn-A';
 export const SONG_DEFAULTS = { enabled: false, chain: [] };
+/** Sample-Referenz einer Spur: nur Metadaten, nie die Audiodaten selbst. */
+export const SAMPLE_DEFAULTS = { preset: '', name: '', program: 0, bank: 0 };
 
 /** Instrumenttypen einer Spur. `synth` nutzt den Patch, `piano`/`drums` eigene Stimmen. */
 export const INSTRUMENTS = [
   { id: 'synth', label: 'SYNTH' },
   { id: 'piano', label: 'PIANO' },
   { id: 'drums', label: 'DRUMS' },
+  { id: 'sf2', label: 'SF2' },
 ];
 const INSTRUMENT_IDS = INSTRUMENTS.map((i) => i.id);
 
@@ -226,6 +229,7 @@ const KNOWN_TRACK_KEYS = new Set([
   'insert',
   'clips',
   'takes',
+  'sample',
 ]);
 
 const TOP_LEVEL_PATCH_KEYS = new Set([
@@ -261,6 +265,7 @@ export function createTrack({
   sends,
   insert,
   instrument = 'synth',
+  sample,
 } = {}) {
   const track = {
     id: id || newId('trk'),
@@ -273,6 +278,7 @@ export function createTrack({
     instrument: INSTRUMENT_IDS.includes(instrument) ? instrument : 'synth',
     sends: { ...SEND_DEFAULTS, ...(sends || {}) },
     insert: { ...INSERT_DEFAULTS, ...(insert || {}) },
+    sample: { ...SAMPLE_DEFAULTS, ...(sample || {}) },
     clips: { [DEFAULT_SCENE_ID]: new Clip() },
   };
   attachClipAlias(track);
@@ -588,6 +594,30 @@ function validateInsert(raw, path, errors, warnings) {
   return insert;
 }
 
+/** Sample-Referenz prüfen: nur Metadaten, keine Audiodaten im Projekt. */
+function validateSample(raw, path, errors, warnings) {
+  const sample = { ...SAMPLE_DEFAULTS };
+  if (raw === undefined) return sample;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(`${path}: Objekt erwartet`);
+    return sample;
+  }
+  for (const key of Object.keys(raw)) {
+    if (!(key in SAMPLE_DEFAULTS)) warnings.push(`${path}.${key}: unbekanntes Feld ignoriert`);
+  }
+  if (raw.preset !== undefined) sample.preset = typeof raw.preset === 'string' ? raw.preset.slice(0, LIMITS.maxTrackName) : '';
+  if (raw.name !== undefined) sample.name = typeof raw.name === 'string' ? raw.name.slice(0, 64) : '';
+  for (const field of ['program', 'bank']) {
+    if (raw[field] === undefined) continue;
+    if (!isInt(raw[field]) || raw[field] < 0 || raw[field] > 127) {
+      errors.push(`${path}.${field}: ganzzahlig 0…127 erwartet (${raw[field]})`);
+      continue;
+    }
+    sample[field] = raw[field];
+  }
+  return sample;
+}
+
 function validateSends(raw, path, errors, warnings) {
   const sends = { ...SEND_DEFAULTS };
   if (raw === undefined) return sends;
@@ -803,6 +833,16 @@ function migrateV1toV2(raw) {
   return out;
 }
 
+function migrateV5toV6(raw) {
+  const out = structuredClone(raw);
+  out.version = 6;
+  out.tracks = (Array.isArray(raw.tracks) ? raw.tracks : []).map((t) => {
+    if (!t || typeof t !== 'object') return t;
+    return { ...t, sample: { ...SAMPLE_DEFAULTS, ...(t.sample || {}) } };
+  });
+  return out;
+}
+
 function migrateV4toV5(raw) {
   const out = structuredClone(raw);
   out.version = 5;
@@ -852,6 +892,7 @@ export function migrate(raw) {
   if (out.version === 2) out = migrateV2toV3(out);
   if (out.version === 3) out = migrateV3toV4(out);
   if (out.version === 4) out = migrateV4toV5(out);
+  if (out.version === 5) out = migrateV5toV6(out);
   return out;
 }
 
@@ -951,6 +992,7 @@ export function validateProject(raw) {
       }
       const sends = validateSends(rt.sends, `${at}.sends`, errors, warnings);
       const insert = validateInsert(rt.insert, `${at}.insert`, errors, warnings);
+      const sample = validateSample(rt.sample, `${at}.sample`, errors, warnings);
       const instrument = rt.instrument === undefined ? 'synth' : rt.instrument;
       if (!INSTRUMENT_IDS.includes(instrument)) {
         errors.push(`${at}.instrument: "${instrument}" nicht erlaubt (${INSTRUMENT_IDS.join(' / ')})`);
@@ -986,6 +1028,7 @@ export function validateProject(raw) {
           gain,
           sends,
           insert,
+          sample,
           clips,
         });
       }
@@ -1066,6 +1109,7 @@ export function serialize(project) {
       gain: t.gain,
       sends: { ...SEND_DEFAULTS, ...(t.sends || {}) },
       insert: { ...INSERT_DEFAULTS, ...(t.insert || {}) },
+      sample: { ...SAMPLE_DEFAULTS, ...(t.sample || {}) },
       patch: structuredClone(t.patch),
       clips: Object.fromEntries(
         (project.scenes || []).map((scene) => {

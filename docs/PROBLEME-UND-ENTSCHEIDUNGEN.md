@@ -505,6 +505,20 @@ eine Checkliste vor dem Verkauf, inklusive Hinweis auf die Marke „SoundFont".
 | P8.5 Doku (README, Plan, Entscheidungen) | dieses Update |
 | P8.6 SoundFont/Sample-Instrumente (Kategorie B) | Anbindungspunkt fertig (`registerVoice`, 2 Engine-Tests); Assets/Lizenz extern blockiert |
 
+### E-36 — SF2-Bank nur im Speicher, Projekt speichert nur die Referenz
+
+`track.sample = { preset, name, program, bank }` (Schema v6). Die Audiodaten bleiben im
+Browser-Speicher der laufenden Sitzung; nach einem Neuladen muss die Datei erneut gewählt
+werden. Ohne Bank oder ohne passende Zone spielt die Spur das Klavier.
+
+**Begründung:** Audiodaten im Projekt (JSON oder localStorage) würden Autosave und Dateien
+unbrauchbar groß machen; ein Cache in IndexedDB hätte eine zweite Datenhaltung mit eigener
+Invalidierung eröffnet. Preset-Name + Programm reichen, um die Spur wieder zuzuordnen, sobald
+die Datei da ist — und der Rückfall auf das Klavier verhindert Stille ohne Hinweis.
+
+**Folge:** UI und Diagnose zeigen den Bankzustand; ein späterer IndexedDB-Cache kann hinter
+derselben Schnittstelle (`Engine.setSampleBank`) ergänzt werden, ohne Schemaänderung.
+
 ## Status Welle 9
 
 | Paket | Status |
@@ -513,3 +527,13 @@ eine Checkliste vor dem Verkauf, inklusive Hinweis auf die Marke „SoundFont".
 | P9.2 Test-Fixture-Writer (spezifikationskonform) | umgesetzt, `tests/support/sf2-fixture.mjs` |
 | P9.3 Lizenz-/Verkaufsstrategie | `docs/LIZENZEN.md` (Ampelliste, Checkliste) |
 | P9.4 SampleVoice + Projektfeld + UI | offen (nächste Welle) |
+
+## Status Welle 10
+
+| Paket | Status |
+| --- | --- |
+| P10.1 Schema v6 (`track.sample`) + Migration v5→v6 | umgesetzt, 1 Projekttest |
+| P10.2 Sample-Bank + Sample-Stimme (`js/sampler.js`) | umgesetzt, 5 Sampler-Tests |
+| P10.3 Engine-Anbindung (`registerVoice('sf2')`, Rückfall Klavier) | umgesetzt, in Sampler-Tests geprüft |
+| P10.4 UI: Panel „SF2“, Preset-Wahl, Diagnose | umgesetzt, 1 jsdom-Test |
+| P10.5 Abnahme mit echter Datei im Browser | offen (braucht Nutzer-Datei) |

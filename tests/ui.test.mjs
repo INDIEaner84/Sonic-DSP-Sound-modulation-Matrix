@@ -9,6 +9,7 @@ import { test, eq, assert, setFile, near } from './harness.mjs';
 import { FakeAudioContext, stopTimer } from './support/fake-audio.mjs';
 import { STORAGE_KEY, DELAY_DIVISIONS, delaySeconds, PROJECT_VERSION, INSTRUMENTS } from '../js/project.js';
 import { PRESETS } from '../js/state.js';
+import { buildSf2 } from './support/sf2-fixture.mjs';
 
 setFile('ui');
 
@@ -489,6 +490,51 @@ if (!JSDOM) {
     eq(chips().length, 1);
     eq(chips()[0].textContent, 'A');
     assert(doc.getElementById('delSceneBtn').disabled, 'letzte Szene ist wieder geschützt');
+    eq(errors, []);
+  });
+
+  test('SF2: Datei laden, Preset wählen, Stimme kommt aus der Bank', async () => {
+    eq(doc.getElementById('sf2Tag').textContent, 'KEINE DATEI');
+    assert(doc.getElementById('sf2Preset').disabled, 'Preset-Auswahl ohne Bank gesperrt');
+    assert(doc.getElementById('sf2Info').textContent.includes('keine Bank'), 'Hinweis fehlt');
+
+    const bytes = buildSf2({
+      presets: [
+        { name: 'Piano', program: 0, bank: 0 },
+        { name: 'Strings', program: 48, bank: 0 },
+      ],
+    });
+    const loaded = await mod.importSf2Bytes(bytes, 'test.sf2');
+    assert(loaded.ok, (loaded.errors || []).join(' | '));
+
+    eq(doc.getElementById('sf2Tag').textContent, '2 PRESETS');
+    eq(doc.getElementById('sf2Preset').options.length, 2);
+    eq(doc.getElementById('sf2Preset').disabled, false);
+    assert(doc.getElementById('sf2Info').textContent.includes('2 Presets'), doc.getElementById('sf2Info').textContent);
+    eq(project.tracks[0].instrument, 'sf2', 'Spur nutzt jetzt SF2');
+    eq(project.tracks[0].sample.preset, 'Piano');
+    eq(project.tracks[0].sample.name, 'test.sf2');
+
+    const voice = engine.noteOn(project.tracks[0].id, 60, 0.8);
+    eq(voice.kind, 'sf2', 'Stimme muss aus der Bank kommen');
+    voice.release(engine.ctx.currentTime);
+
+    const presetSelect = doc.getElementById('sf2Preset');
+    presetSelect.value = '1';
+    presetSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await wait(20);
+    eq(project.tracks[0].sample.preset, 'Strings');
+    eq(project.tracks[0].sample.program, 48);
+
+    await wait(800); // Autosave ist entprellt
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY));
+    eq(saved.tracks[0].sample.preset, 'Strings', 'Sample-Referenz landet im Autosave');
+    eq(saved.tracks[0].instrument, 'sf2');
+
+    const broken = await mod.importSf2Bytes(new Uint8Array([1, 2, 3]), 'kaputt.sf2');
+    eq(broken.ok, false);
+    assert(doc.getElementById('toast').textContent.includes('SF2 nicht lesbar'), doc.getElementById('toast').textContent);
+    eq(doc.getElementById('sf2Tag').textContent, '2 PRESETS', 'kaputte Datei darf die Bank nicht ersetzen');
     eq(errors, []);
   });
 

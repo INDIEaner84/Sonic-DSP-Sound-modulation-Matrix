@@ -319,6 +319,28 @@
             </div>
           </section>
 
+          <section class="panel panel-sf2">
+            <div class="panel-head">
+              <h2>SF2</h2>
+              <span class="tag" id="sf2Tag">KEINE DATEI</span>
+            </div>
+            <div class="panel-body">
+              <div class="sf2-row">
+                <input type="file" id="sf2File" accept=".sf2" class="sf2-file" aria-label="SF2-Datei wählen" />
+                <button class="btn ghost" id="sf2LoadBtn" type="button">Datei wählen</button>
+              </div>
+              <label class="sf2-preset">
+                <span>PRESET</span>
+                <select id="sf2Preset" class="mini-select" aria-label="SF2-Preset der aktiven Spur" disabled></select>
+              </label>
+              <div class="sf2-info" id="sf2Info">keine Bank geladen</div>
+              <p class="hint">
+                Eigene .sf2-Datei laden (z. B. CC0-Soundfont) · die Datei bleibt lokal, im
+                Projekt stehen nur Preset-Name und Programm · Instrument „SF2“ nutzt sie
+              </p>
+            </div>
+          </section>
+
           <section class="panel panel-midi">
             <div class="panel-head">
               <h2>MIDI In</h2>

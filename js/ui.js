@@ -3,6 +3,7 @@
  */
 
 import { SOURCES, DESTS, clamp, DRUM_KIT } from './state.js';
+import { INSTRUMENTS } from './project.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const KNOB_ARC = 'M 11.272 36.728 A 18 18 0 1 1 36.728 36.728';
@@ -1206,11 +1207,7 @@ export function createTrackList(root, {
       const instrumentSelect = document.createElement('select');
       instrumentSelect.className = 'mini-select track-instrument-select';
       instrumentSelect.setAttribute('aria-label', `Instrument ${track.name}`);
-      [
-        ['synth', 'SYNTH'],
-        ['piano', 'PIANO'],
-        ['drums', 'DRUMS'],
-      ].forEach(([value, label]) => {
+      INSTRUMENTS.forEach(({ id: value, label }) => {
         const option = document.createElement('option');
         option.value = value;
         option.textContent = label;

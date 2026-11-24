@@ -52,6 +52,10 @@ import {
 import { encodeProject, decodeToProject, defaultImportPatches } from './midi-io.js';
 import { mixSeconds, canRecord, recordOutput, blobToWav } from './recorder.js';
 import { createMidiRouter, openMidiAccess, describeMessage } from './midi-input.js';
+import { createSampleBank } from './sampler.js';
+
+/* Vom Nutzer geladene SF2-Bank (nur im Speicher, kein Asset im Projekt). */
+let sampleBank = null;
 import {
   createKnob,
   createSeg,
@@ -459,8 +463,13 @@ const trackList = createTrackList(document.getElementById('tracks'), {
     if (t.instrument === value) return;
     clock.panic();
     t.instrument = value;
+    if (value === 'sf2' && !sampleBank) {
+      toast('Keine SF2-Bank geladen – die Spur klingt wie Klavier (Panel „SF2")', 'warn');
+    }
     trackList.build();
     refreshInstrumentUi();
+    refreshSf2Ui();
+  refreshSf2Ui();
   refreshSceneUi();
   renderDiagnostics();
     scheduleSave();
@@ -561,6 +570,7 @@ function diagnosticsText() {
     ['Audio', audio],
     ['Projekt', `Schema v${PROJECT_VERSION} · ${project.tracks.length} Spuren · ${notes} Noten`],
     ['MIDI', midi],
+    ['SF2-Bank', sampleBank ? sampleBank.summary() : 'keine (Nutzer-Datei)'],
     ['WAV-Mitschnitt', record],
     ['Autosave', autosave ? autosave.textContent : '–'],
   ];
@@ -664,7 +674,10 @@ async function loadJsonFile(file) {
 function newProject() {
   if (!window.confirm('Neues Projekt starten? Der aktuelle Stand wird verworfen (vorher speichern!).')) return;
   clock.stop();
+  sampleBank = null;
+  engine.setSampleBank(null);
   replaceProject(freshProject());
+  refreshSf2Ui();
   toast('Neues Projekt', 'info');
 }
 
@@ -847,6 +860,137 @@ function refreshInstrumentUi() {
   const instrument = track ? track.instrument || 'synth' : 'synth';
   if (pads) pads.setInstrument(instrument);
   if (padTag) padTag.textContent = instrument.toUpperCase();
+}
+
+/* --------------------------------------------------------------------- SF2 */
+
+const sf2FileEl = document.getElementById('sf2File');
+const sf2LoadBtn = document.getElementById('sf2LoadBtn');
+const sf2PresetEl = document.getElementById('sf2Preset');
+const sf2InfoEl = document.getElementById('sf2Info');
+const sf2TagEl = document.getElementById('sf2Tag');
+
+function activeSampleRef() {
+  const track = activeTrack();
+  return track && track.sample ? track.sample : { preset: '', name: '', program: 0, bank: 0 };
+}
+
+function refreshSf2Ui() {
+  const bank = sampleBank;
+  const info = bank ? bank.info : null;
+  if (sf2TagEl) sf2TagEl.textContent = info ? `${info.presets} PRESETS` : 'KEINE DATEI';
+  if (sf2InfoEl) {
+    if (!info) {
+      sf2InfoEl.textContent = 'keine Bank geladen';
+    } else {
+      const parts = [info.name || info.fileName || 'SF2'];
+      parts.push(`${info.presets} Presets`, `${info.zones} Zonen`, `${info.samples} Samples`);
+      if (info.has24Bit) parts.push('24-Bit ignoriert');
+      sf2InfoEl.textContent = parts.join(' · ');
+    }
+  }
+  if (!sf2PresetEl) return;
+  sf2PresetEl.disabled = !bank;
+  const presets = bank ? bank.presets : [];
+  const signature = presets.map((p) => `${p.index}:${p.name}`).join('|');
+  if (sf2PresetEl.dataset.signature !== signature) {
+    sf2PresetEl.innerHTML = '';
+    for (const preset of presets) {
+      const option = document.createElement('option');
+      option.value = String(preset.index);
+      const drum = preset.bank === 128 ? ' (Drum)' : '';
+      option.textContent = `${String(preset.program).padStart(3, '0')}${drum} · ${preset.name}`;
+      sf2PresetEl.appendChild(option);
+    }
+    sf2PresetEl.dataset.signature = signature;
+  }
+  if (bank) {
+    const resolved = bank.resolve(activeSampleRef());
+    if (resolved) sf2PresetEl.value = String(resolved.index);
+  }
+}
+
+/**
+ * Lädt SF2-Bytes in die Engine. Exportiert, damit der UI-Test denselben Weg
+ * nimmt wie der Datei-Dialog (kein zweiter Codepfad).
+ */
+export async function importSf2Bytes(bytes, fileName = 'user.sf2') {
+  if (!engine.ctx) {
+    toast('Erst „AUDIO STARTEN" – Samples brauchen laufendes Audio', 'warn');
+    refreshSf2Ui();
+    return { ok: false, bank: null, errors: ['Audio nicht gestartet'], warnings: [] };
+  }
+  const result = createSampleBank(bytes, engine.ctx, { fileName });
+  if (!result.ok) {
+    toast(`SF2 nicht lesbar: ${result.errors[0] || 'unbekannter Fehler'}`, 'err');
+    refreshSf2Ui();
+    return result;
+  }
+  sampleBank = result.bank;
+  engine.setSampleBank(sampleBank);
+  const preset = result.bank.presets[0];
+  const track = activeTrack();
+  if (track && preset) {
+    clock.panic();
+    track.sample = { preset: preset.name, name: fileName, program: preset.program, bank: preset.bank };
+    if (track.instrument !== 'sf2') track.instrument = 'sf2';
+    trackList.build();
+  }
+  refreshSf2Ui();
+  refreshInstrumentUi();
+  renderDiagnostics();
+  scheduleSave();
+  const hints = result.warnings.length ? ` (${result.warnings.length} Hinweis(e))` : '';
+  toast(`SF2 geladen: ${result.bank.info.presets} Presets${hints}`, 'ok');
+  return { ok: true, bank: result.bank, warnings: result.warnings, errors: [] };
+}
+
+async function loadSf2File(file) {
+  if (!file) return { ok: false };
+  let buffer;
+  try {
+    buffer = await file.arrayBuffer();
+  } catch (err) {
+    toast('Datei konnte nicht gelesen werden', 'err');
+    return { ok: false };
+  }
+  return importSf2Bytes(new Uint8Array(buffer), file.name || 'user.sf2');
+}
+
+if (sf2LoadBtn && sf2FileEl) {
+  sf2LoadBtn.addEventListener('click', () => sf2FileEl.click());
+}
+
+if (sf2FileEl) {
+  sf2FileEl.addEventListener('change', async () => {
+    const file = sf2FileEl.files && sf2FileEl.files[0];
+    if (!file) return;
+    await loadSf2File(file);
+    sf2FileEl.value = '';
+  });
+}
+
+if (sf2PresetEl) {
+  sf2PresetEl.addEventListener('change', () => {
+    const bank = sampleBank;
+    const track = activeTrack();
+    if (!bank || !track) return;
+    const preset = bank.presets[Number(sf2PresetEl.value)];
+    if (!preset) return;
+    clock.panic();
+    track.sample = {
+      preset: preset.name,
+      name: (track.sample && track.sample.name) || bank.info.fileName || '',
+      program: preset.program,
+      bank: preset.bank,
+    };
+    if (track.instrument !== 'sf2') track.instrument = 'sf2';
+    trackList.build();
+    refreshSf2Ui();
+    refreshInstrumentUi();
+    scheduleSave();
+    toast(`Preset „${preset.name}"`, 'info');
+  });
 }
 
 /* ------------------------------------------------------------------ MIDI In */
@@ -1406,6 +1550,7 @@ function refreshUI() {
   syncPresetSelect();
   updateOctaveLabel();
   refreshInstrumentUi();
+  refreshSf2Ui();
   refreshSceneUi();
   renderDiagnostics();
   projectNameInput.value = project.name;

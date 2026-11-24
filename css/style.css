@@ -2261,3 +2261,48 @@ body.is-recording .loop-progress i {
   outline: none;
   border-color: rgba(84, 215, 199, 0.55);
 }
+
+/* --------------------------------------------------------------------- SF2 */
+
+.panel-sf2 .panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sf2-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sf2-file {
+  display: none;
+}
+
+.sf2-preset {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+}
+
+.sf2-preset .mini-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sf2-info {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  color: #9fb2c2;
+  padding: 4px 5px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid #26303a;
+  overflow-wrap: anywhere;
+}

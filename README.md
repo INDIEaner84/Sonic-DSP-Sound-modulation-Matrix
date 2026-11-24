@@ -19,6 +19,9 @@ Jede Spur hat ein **Instrument**: `SYNTH` (der Patch mit Matrix), `PIANO` (Parti
 velocity-abhängig) oder `DRUMS` (Kit mit acht Pads, GM-Noten 36–49). Klavier und Kit sind
 synthetisch erzeugt — keine Sample-Downloads, keine Lizenzfragen.
 
+Wer eigene Samples hat, lädt im Panel **SF2** eine `.sf2`-Datei; die Spur spielt dann
+Presets daraus (eigener Parser, keine Fremdbibliothek, kein CDN — siehe `docs/LIZENZEN.md`).
+
 Jede Spur hat außerdem **Szenen**: bis zu acht Teile (A–H) mit je eigenem Clip. Ein
 **Song-Modus** spielt eine Kette (`A A B A …`) automatisch durch; ohne Song-Modus loopt die
 aktive Szene. Projektdatei-Schema ist v5, ältere Stände (v1–v4) werden beim Laden migriert.
@@ -129,6 +132,20 @@ Die Loop-Länge (Takte, Tempo) gilt für alle Szenen; nur die Noten unterscheide
 `Speichern (JSON)` enthält Szenen, aktive Szene und Kette; ältere Dateien landen beim Laden
 automatisch in Szene A. Details: `docs/PLAN-SONG-MODUS.md`.
 
+### SF2-Samples (eigene Datei)
+
+| Element | Wirkung |
+| --- | --- |
+| **Datei wählen** | öffnet den Datei-Dialog, liest die `.sf2` im Browser (nichts wird hochgeladen) |
+| **PRESET** | Preset der Bank für die **aktive** Spur (Programm + Bank werden gespeichert) |
+| Info-Zeile | Name, Presets, Zonen, Samples; Hinweis bei 24-Bit-Samples |
+| Status-Panel | zeigt die geladene Bank („… · 12 Presets“) |
+
+Die Bank liegt nur im Speicher: nach einem Neustart der Seite die Datei erneut wählen —
+Projekt, Autosave und JSON enthalten nur Preset-Name, Programm und Bank, **nie** Audiodaten.
+Ohne geladene Datei fällt eine `SF2`-Spur auf das Klavier zurück (kein Stumm-Schweigen).
+Geladen wird ausschließlich, was der Nutzer auswählt; das Repo bleibt asset-frei.
+
 ### Instrumente und Pads
 
 | Instrument | Klang | Bedienung |
@@ -136,6 +153,7 @@ automatisch in Szene A. Details: `docs/PLAN-SONG-MODUS.md`.
 | **SYNTH** | der Patch: zwei Oszillatoren, Filter, Hüllkurven, Matrix, LFOs | Rack links/rechts, Preset-Auswahl |
 | **PIANO** | fünf verstimmte Partiale + Hammer-Noise, Ausklingen je Lage | Tastatur/Pads/MIDI; velocity steuert Helligkeit und Lautstärke |
 | **DRUMS** | Kick, Snare, Clap, Hat zu/open, Tom, Rim, Crash (synthetisch) | die acht Pads im Panel „Pads“ oder Noten 36–49 |
+| **SF2** | Samples aus einer vom Nutzer geladenen `.sf2`-Datei | Panel „SF2“: Datei laden, Preset wählen; ohne Datei klingt die Spur wie Klavier |
 
 Pads lassen sich mit der Maus, der Rechner-Tastatur und über MIDI spielen; im Aufnahme-Modus
 landen Pad-Schläge als Noten im Loop der aktiven Spur. Ist die aktive Spur eine Drum-Spur,
@@ -199,6 +217,7 @@ js/audio.js         Audio-Engine: Spuren-Ketten, Synth-/Piano-/Drum-Stimmen, FX-
 js/clock.js         Transport, Lookahead-Scheduler, Quantize, Swing, Aufnahme-Logik
 js/wav.js           WAV-Encoder (16 Bit PCM), ohne Browser-Abhängigkeit
 js/sf2.js           SF2-Parser (RIFF/pdta/Generatoren, 16-Bit-PCM), ohne Fremdbibliothek
+js/sampler.js       Sample-Bank (lazy AudioBuffers) und Sample-Stimme für die Engine
 js/recorder.js      Mix-Mitschnitt (MediaRecorder) und Umkodierung nach WAV
 js/ui.js            Knobs, Slider, Matrix, Keyboard, Scope, Loop-Leiste, Spurenliste
 js/main.js          Verdrahtung von Projekt, Engine, Clock und UI
@@ -227,8 +246,8 @@ die Note-Logik — dadurch bleiben geplante Releases konsistent.
 ## Tests
 
 ```bash
-npm test           # 139 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In/SF2
-npm run test:ui    # zusätzlich 28 jsdom-Integrationstests (167 gesamt)
+npm test           # 145 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In/SF2/Sampler
+npm run test:ui    # zusätzlich 29 jsdom-Integrationstests (174 gesamt)
 ```
 
 Die Tests laufen ohne Framework (`node:test`-frei, eigener Mini-Runner in
@@ -249,7 +268,7 @@ komplette UI-Fluss (Spur anlegen, umbenennen, aufnehmen, exportieren, importiere
 | E6 | Instrumente je Spur (Klavier, Drum-Kit, Pads), Web-MIDI-Eingang mit CC-Learn | fertig (Web MIDI nur im Browser prüfbar) |
 | E7 | Spur-Insert (Drive) und Status-Panel | fertig |
 | E8 | Song-Modus: Szenen, Kette, MIDI-Export der Kette (Schema v5) | fertig (Browser-Abnahme des Durchlaufs offen) |
-| E9 | Sample-Instrumente: eigener SF2-Parser | Parser + Tests fertig, Wiedergabe/UI offen – `docs/SOUNDFONT-PLAN.md` |
+| E9 | Sample-Instrumente aus eigener `.sf2`-Datei | fertig: Parser, Sample-Stimme, Schema v6, UI — Browser-Abnahme mit echter Datei offen |
 
 Details und Begründungen: `docs/KOMPONIEREN-KONZEPT.md`, offene Punkte und
 Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`, Lizenz- und Verkaufsfragen:
@@ -257,8 +276,9 @@ Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`, Lizenz- und Verkaufsfrage
 
 ## Lizenzen
 
-Der komplette Code (inklusive MIDI-, WAV- und SF2-Parser) ist eigene Implementierung, es
-gibt **keine** Fremdbibliothek zur Laufzeit und **keine** Audio-Assets im Repo. Damit ist das
+Der komplette Code (inklusive MIDI-, WAV-, SF2-Parser und Sample-Stimme) ist eigene
+Implementierung, es gibt **keine** Fremdbibliothek zur Laufzeit und **keine** Audio-Assets
+im Repo. Samples kommen ausschließlich aus einer Datei, die der Nutzer selbst auswählt. Damit ist das
 Projekt ohne drittanbieterrechtliche Auflagen kommerziell nutzbar; welche Lizenzen für
 Samples infrage kommen (CC0 ja, CC BY mit Credits, GPL/„free for music" nein), steht in
 `docs/LIZENZEN.md` samt Checkliste vor einem Verkauf.
@@ -275,6 +295,8 @@ Samples infrage kommen (CC0 ja, CC BY mit Credits, GPL/„free for music" nein),
 - Web MIDI braucht einen Browser mit `navigator.requestMIDIAccess` (Chrome/Edge; Firefox
   nur mit Freigabe) und eine Nutzeraktion für die Berechtigung — ohne Zugriff bleibt das
   Panel bei „AUS“ und die Tastatur funktioniert unverändert.
-- „VST“ im engeren Sinn (native Plugins) gibt es im Browser nicht; Klavier und Kit sind
-  eingebaute Synth-Instrumente. Sample-basierte Instrumente (SF2) sind als nächste Stufe
-  vorgesehen.
+- „VST“ im engen Sinn (native Plugins) gibt es im Browser nicht; Klavier und Kit sind
+  eingebaute Synthese-Instrumente. Samples kommen über eine selbst gewählte `.sf2`-Datei
+  (Panel „SF2“, 16-Bit-PCM; Modulatoren und Datei-Effekte der Bank werden ignoriert).
+- Die geladene SF2-Bank liegt nur im Speicher (kein Cache in der Datenbank): nach dem
+  Neuladen der Seite die Datei erneut wählen. Das Projekt speichert nur die Referenz.

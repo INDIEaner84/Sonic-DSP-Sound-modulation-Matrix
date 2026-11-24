@@ -1,9 +1,10 @@
 # Plan: sample-basierte Instrumente (SoundFont / SF2)
 
-Status: **Parser fertig, Wiedergabe offen** (Kategorie B). Seit Welle 9 liest `js/sf2.js`
-SF2-Dateien ohne Fremdbibliothek; die Engine hat seit Welle 8 einen Registrierungspunkt für
-neue Instrumente (`registerVoice`). Was fehlt: SampleVoice, Verdrahtung im Projekt und die
-UI zum Laden — Assets bleiben Sache des Nutzers (siehe `docs/LIZENZEN.md`). Dieses Dokument ist die Vorlage,
+Status: **umgesetzt ohne Assets** (Kategorie B, Welle 10). Parser (`js/sf2.js`),
+Sample-Bank und -Stimme (`js/sampler.js`), Schema v6 (`track.sample`) und das Panel „SF2“
+sind fertig und getestet. Die Audiodateien kommen ausschließlich vom Nutzer; im Repo liegt
+weiterhin kein Asset (siehe `docs/LIZENZEN.md`). Offen ist nur die Abnahme mit einer echten
+Datei im Browser. Dieses Dokument ist die Vorlage,
 damit die Umsetzung später ohne Umbau der bestehenden Architektur möglich ist.
 
 ## Warum jetzt nicht
@@ -121,3 +122,28 @@ fehlendes `pdta`, abgeschnittene Datei, Größenlimit).
    Rückfall auf `piano` ohne Datei — inklusive Fehlermeldung statt Stille.
 4. Abnahme: Note aus einer echten, vom Nutzer gelieferten Datei hören; erst dann gilt B als
    fertig.
+
+
+## Umsetzung (Welle 10)
+
+| Teil | Datei | Verhalten |
+| --- | --- | --- |
+| Parser | `js/sf2.js` | RIFF/`INFO`/`sdta`/`pdta`, Presets + Zonen, 16-Bit-PCM, Bereichsprüfungen |
+| Bank | `js/sampler.js` (`SampleBank`) | AudioBuffers **lazy** je Zone, Wiederverwendung, `resolve({name,program,bank})` |
+| Stimme | `js/sampler.js` (`SampleVoice`) | `kind:'sf2'`, `playbackRate` aus Grundton/Feinstimmung, Attack/Release, Loop-Grenzen aus der Datei, Pan aus der Zone, `release/tick/dispose` wie die anderen Stimmen |
+| Engine | `js/audio.js` | `registerVoice('sf2', …)`, `Engine.setSampleBank()`; ohne Bank oder ohne passende Zone → **Klavier** |
+| Projekt | `js/project.js` | Schema **v6**: `track.sample = {preset, name, program, bank}` (nur Metadaten), Migration v5→v6 additiv |
+| UI | `index.html`, `js/main.js` | Panel „SF2“: Datei-Dialog, Preset-Auswahl, Info-Zeile, Diagnose-Zeile; Instrument `SF2` in der Spurzeile |
+
+Bewusste Grenzen:
+
+- Nur 16-Bit-PCM; `sm24` wird erkannt und gemeldet, nicht gespielt.
+- Modulatoren, Filter-Hüllkurven und Effekt-Sends der Bank werden ignoriert — dafür gelten
+  unsere Spur-Sends, Drive, Pan und Filter.
+- Die Bank liegt **nur im Speicher**. Nach dem Neuladen der Seite muss die Datei erneut
+  gewählt werden; das Projekt speichert nur Preset/Programm/Bank. (Ein IndexedDB-Cache wäre
+  möglich, wurde bewusst zurückgestellt, um keine zweite Datenhaltung zu öffnen.)
+- Kein Streaming, kein Preload: der erste Ton je Zone kostet einen Buffer-Aufbau.
+
+Abnahme im Browser (offen): echte CC0-Datei laden, Preset wechseln, Note hören, Spur-Sends
+und Drive prüfen, Projekt speichern/laden (Referenz bleibt, Ton braucht erneut die Datei).

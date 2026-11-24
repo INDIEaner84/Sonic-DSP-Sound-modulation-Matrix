@@ -38,6 +38,7 @@ jede Abhängigkeit mit Lizenz und Pflicht fest.
 | --- | --- | --- | --- |
 | App-Code (`js/*.js`, `css/`, `index.html`, `server.cjs`) | eigene Implementierung | Projektlizenz (offen, siehe unten) | unkritisch |
 | `js/sf2.js` (SF2-Parser) | eigene Implementierung, keine Fremdbibliothek | Projektlizenz | unkritisch |
+| `js/sampler.js` (Sample-Bank/-Stimme) | eigene Implementierung | Projektlizenz | unkritisch |
 | `js/midi-io.js`, `js/wav.js`, `js/recorder.js` | eigene Implementierung | Projektlizenz | unkritisch |
 | Samples/Audio-Dateien | **keine im Repo** | — | unkritisch |
 | Externe CDNs, Web-Fonts, Analytics | **keine** | — | unkritisch |

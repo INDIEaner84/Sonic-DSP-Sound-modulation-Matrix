@@ -11,6 +11,7 @@
  */
 
 import { SOURCES, DESTS, clamp, mulberry32, DRUM_KIT } from './state.js';
+import { createSf2Voice } from './sampler.js';
 import { trackAudible, delaySeconds, FX_DEFAULTS } from './project.js';
 
 const TWO_PI = Math.PI * 2;
@@ -649,6 +650,11 @@ const VOICE_FACTORIES = new Map([
   ['synth', (engine, chain, note, velocity, at) => new Voice(engine, chain, note, velocity, at)],
   ['piano', (engine, chain, note, velocity, at) => new PianoVoice(engine, chain, note, velocity, at)],
   ['drums', (engine, chain, note, velocity, at) => new DrumVoice(engine, chain, note, velocity, at)],
+  /* SF2-Samples: ohne geladene Bank oder ohne passende Zone → Klavier (nie Stille). */
+  ['sf2', (engine, chain, note, velocity, at) =>
+    createSf2Voice(engine, chain, note, velocity, at) ||
+    new PianoVoice(engine, chain, note, velocity, at),
+  ],
 ]);
 
 /** Stimmen-Fabrik für ein Instrument (unbekannt → Synth). */
@@ -683,6 +689,8 @@ export class Engine {
     this.project = null;
     this.chains = new Map(); // trackId -> {track, input, pan, gain}
     this.voices = new Set();
+    /* Vom Nutzer geladene SF2-Bank (siehe js/sampler.js); null = keine. */
+    this.sampleBank = null;
     this.activity = new Map(); // trackId -> {src, sums}
     this.lfo1 = new LFO();
     this.lfo2 = new LFO();
@@ -981,6 +989,12 @@ export class Engine {
 
     this._applyFxSettings(now);
     this.master.gain.setTargetAtTime(this.project.master, now, 0.03);
+  }
+
+  /** Setzt die aktive SF2-Bank (oder null). Laufende Stimmen bleiben unberührt. */
+  setSampleBank(bank) {
+    this.sampleBank = bank || null;
+    return this.sampleBank;
   }
 
   _steal(at) {
