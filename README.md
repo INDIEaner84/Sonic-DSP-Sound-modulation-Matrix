@@ -198,6 +198,7 @@ js/midi-input.js    Web-MIDI-Eingang: Parser, CC-Learn, Geräte (ohne DOM testba
 js/audio.js         Audio-Engine: Spuren-Ketten, Synth-/Piano-/Drum-Stimmen, FX-Busse, Metronom
 js/clock.js         Transport, Lookahead-Scheduler, Quantize, Swing, Aufnahme-Logik
 js/wav.js           WAV-Encoder (16 Bit PCM), ohne Browser-Abhängigkeit
+js/sf2.js           SF2-Parser (RIFF/pdta/Generatoren, 16-Bit-PCM), ohne Fremdbibliothek
 js/recorder.js      Mix-Mitschnitt (MediaRecorder) und Umkodierung nach WAV
 js/ui.js            Knobs, Slider, Matrix, Keyboard, Scope, Loop-Leiste, Spurenliste
 js/main.js          Verdrahtung von Projekt, Engine, Clock und UI
@@ -226,8 +227,8 @@ die Note-Logik — dadurch bleiben geplante Releases konsistent.
 ## Tests
 
 ```bash
-npm test           # 134 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In
-npm run test:ui    # zusätzlich 28 jsdom-Integrationstests (162 gesamt)
+npm test           # 139 Tests: Projekt/Clip/MIDI/Engine/Clock/WAV/Recorder/MIDI-In/SF2
+npm run test:ui    # zusätzlich 28 jsdom-Integrationstests (167 gesamt)
 ```
 
 Die Tests laufen ohne Framework (`node:test`-frei, eigener Mini-Runner in
@@ -248,10 +249,19 @@ komplette UI-Fluss (Spur anlegen, umbenennen, aufnehmen, exportieren, importiere
 | E6 | Instrumente je Spur (Klavier, Drum-Kit, Pads), Web-MIDI-Eingang mit CC-Learn | fertig (Web MIDI nur im Browser prüfbar) |
 | E7 | Spur-Insert (Drive) und Status-Panel | fertig |
 | E8 | Song-Modus: Szenen, Kette, MIDI-Export der Kette (Schema v5) | fertig (Browser-Abnahme des Durchlaufs offen) |
-| E9 | SoundFont-/Sample-Instrumente | vorbereitet, Assets und Lizenz extern blockiert – `docs/SOUNDFONT-PLAN.md` |
+| E9 | Sample-Instrumente: eigener SF2-Parser | Parser + Tests fertig, Wiedergabe/UI offen – `docs/SOUNDFONT-PLAN.md` |
 
 Details und Begründungen: `docs/KOMPONIEREN-KONZEPT.md`, offene Punkte und
-Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`.
+Entscheidungen: `docs/PROBLEME-UND-ENTSCHEIDUNGEN.md`, Lizenz- und Verkaufsfragen:
+`docs/LIZENZEN.md`.
+
+## Lizenzen
+
+Der komplette Code (inklusive MIDI-, WAV- und SF2-Parser) ist eigene Implementierung, es
+gibt **keine** Fremdbibliothek zur Laufzeit und **keine** Audio-Assets im Repo. Damit ist das
+Projekt ohne drittanbieterrechtliche Auflagen kommerziell nutzbar; welche Lizenzen für
+Samples infrage kommen (CC0 ja, CC BY mit Credits, GPL/„free for music" nein), steht in
+`docs/LIZENZEN.md` samt Checkliste vor einem Verkauf.
 
 ## Hinweise
 

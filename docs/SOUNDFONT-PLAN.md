@@ -1,8 +1,9 @@
 # Plan: sample-basierte Instrumente (SoundFont / SF2)
 
-Status: **vorbereitet, Assets extern blockiert** (Kategorie B). Der Anbindungspunkt in der
-Engine steht seit Welle 8 (`registerVoice`), Schema, Stimme und Asset-Lieferung fehlen noch
-und brauchen freigegebene Dateien plus Lizenzentscheidung. Dieses Dokument ist die Vorlage,
+Status: **Parser fertig, Wiedergabe offen** (Kategorie B). Seit Welle 9 liest `js/sf2.js`
+SF2-Dateien ohne Fremdbibliothek; die Engine hat seit Welle 8 einen Registrierungspunkt für
+neue Instrumente (`registerVoice`). Was fehlt: SampleVoice, Verdrahtung im Projekt und die
+UI zum Laden — Assets bleiben Sache des Nutzers (siehe `docs/LIZENZEN.md`). Dieses Dokument ist die Vorlage,
 damit die Umsetzung später ohne Umbau der bestehenden Architektur möglich ist.
 
 ## Warum jetzt nicht
@@ -85,3 +86,38 @@ Noch offen (braucht Entscheidung/Assets):
 3. `assets/instruments/<name>/` mit `LICENSES.md` (Quelle, Lizenz, Bearbeitung); kein Nachladen
    von Fremd-URLs, damit Vorschau und Offline-Betrieb gleich funktionieren.
 4. Status-Panel: Ladezustand/Sample-Anzahl; Fehler → Toast + Rückfall auf `piano`.
+
+
+## Stand Welle 9: eigener SF2-Parser
+
+`js/sf2.js` (eigene Implementierung, ~520 Zeilen) liest den RIFF-Baum (`INFO`, `sdta.smpl`,
+`pdta` mit `phdr/pbag/pmod/pgen/inst/ibag/imod/igen/shdr`), baut Presets → Preset-Zonen →
+Instrument-Zonen → Sample-Köpfe und prüft dabei:
+
+- RIFF/`sfbk`, Chunk-Grenzen, Pflicht-Chunks, Record-Größen (Vielfache der Satzgröße)
+- Sample-Bereiche gegen die PCM-Länge, Samplerate 400–192000 Hz, Loop-Grenzen
+- Generator-Werte: `keyRange`, `velRange`, `sampleID`, `sampleModes`, `overridingRootKey`,
+  `coarseTune`/`fineTune`, `initialAttenuation`, `pan`, `attackVolEnv`/`releaseVolEnv`
+- Grenzen: 64 MB Datei, 512 Presets, 8192 Zonen
+
+Ausgabe: `{ info, presets[{name,bank,program,zones}], samples, pcmFrames, pcm }` plus
+`sf2Presets`, `findSf2Preset`, `zonesForNote`, `readSf2Zone` (PCM als Float32, Loop-Grenzen,
+Grundton, Dämpfung). `sm24` (24 Bit) wird erkannt und gemeldet, aber nicht ausgewertet;
+Modulatoren und Datei-Effekte werden bewusst ignoriert (die Engine hat Drive/Sends/Pan).
+
+Getestet wird gegen **selbst erzeugte, spezifikationskonforme SF2-Bytes**
+(`tests/support/sf2-fixture.mjs`), nicht gegen eine heruntergeladene Datei: 5 Tests mit
+Preset-Listen, Key-Bereichen, Loop-Flags, 24-Bit-Hinweis und Fehlerfällen (kaputter Formtyp,
+fehlendes `pdta`, abgeschnittene Datei, Größenlimit).
+
+### Nächste Schritte (weiterhin asset-frei)
+
+1. `SampleVoice`: `readSf2Zone` → `AudioBuffer` (Loop-Punkte, `playbackRate` aus Grundton +
+   Feinstimmung), Hüllkurve, `release/tick/dispose` wie die anderen Stimmen, Registrierung
+   über `registerVoice('sf2', …)`.
+2. Projekt: `track.sample = { presetIndex, presetName, program, bank }` (Schema v6,
+   additiv), Datei selbst **nicht** im Projekt; optional Bytes in IndexedDB cachen.
+3. UI: „SF2 laden" im Instrument-Panel, Preset-Auswahl, Status im Diagnose-Panel,
+   Rückfall auf `piano` ohne Datei — inklusive Fehlermeldung statt Stille.
+4. Abnahme: Note aus einer echten, vom Nutzer gelieferten Datei hören; erst dann gilt B als
+   fertig.

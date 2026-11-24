@@ -467,6 +467,33 @@ dass ein Projekt mit unbekanntem Instrument stumm lädt.
 Assets + Lizenz). Es wurden **keine** Samples, keine Fremd-URLs und kein SoundFont-Synth
 eingebaut — der Klang ist ohne freigegebene Assets nicht abnehmbar.
 
+### E-34 — Eigener SF2-Parser statt Fremdbibliothek
+
+`js/sf2.js` liest SF2-Dateien selbst (RIFF, `pdta`, Generatoren, 16-Bit-PCM). Keine
+Fremdabhängigkeit, kein CDN, kein Build-Schritt.
+
+**Begründung:** Das Projekt soll verkaufbar sein. Eigener Code erzeugt keine
+Lizenzpflichten (kein `NOTICE`, keine Copyleft-Frage, kein LGPL-WASM). `smplr` (MIT) wäre
+erlaubt, hätte aber eine weitere Abhängigkeit plus UMD-Parser-Shim bedeutet.
+
+**Folge:** Fehlerfälle sind hausgemacht und getestet (kaputter Formtyp, fehlende Chunks,
+abgeschnittene Datei, Größenlimit); 24-Bit-Samples werden gemeldet statt still falsch
+gespielt. `docs/SOUNDFONT-PLAN.md` nennt die verbleibenden Schritte.
+
+### E-35 — Asset-Politik: CC0 oder Nutzer-Datei, sonst nichts
+
+Im Repo liegen keine Audio-Assets. Samples kommen entweder vom Nutzer (`.sf2` per
+Datei-Dialog, Lizenz bleibt seine) oder — nach ausdrücklicher Freigabe — als einzelnes
+CC0-Instrument mit `LICENSES.md`. CC BY nur mit sichtbaren Credits; GPL-Soundfonts und
+„free for music"-Bänke sind ausgeschlossen.
+
+**Begründung:** Bei einem Verkauf muss der Rechteinhaber die Herkunft jeder Datei belegen
+können. CC0 ist die einzige Asset-Lizenz ohne Auflagen; alles andere erzeugt Pflichten, die
+man in einem Produkt sichtbar erfüllen muss.
+
+**Folge:** `docs/LIZENZEN.md` enthält die Ampelliste (Code, Assets, geprüfte Kandidaten) und
+eine Checkliste vor dem Verkauf, inklusive Hinweis auf die Marke „SoundFont".
+
 ## Status Welle 8
 
 | Paket | Status |
@@ -477,3 +504,12 @@ eingebaut — der Klang ist ohne freigegebene Assets nicht abnehmbar.
 | P8.4 MIDI-Export der Kette, Import in aktive Szene | umgesetzt, 3 MIDI-Tests |
 | P8.5 Doku (README, Plan, Entscheidungen) | dieses Update |
 | P8.6 SoundFont/Sample-Instrumente (Kategorie B) | Anbindungspunkt fertig (`registerVoice`, 2 Engine-Tests); Assets/Lizenz extern blockiert |
+
+## Status Welle 9
+
+| Paket | Status |
+| --- | --- |
+| P9.1 Eigener SF2-Parser (`js/sf2.js`) | umgesetzt, 5 Tests gegen erzeugte SF2-Bytes |
+| P9.2 Test-Fixture-Writer (spezifikationskonform) | umgesetzt, `tests/support/sf2-fixture.mjs` |
+| P9.3 Lizenz-/Verkaufsstrategie | `docs/LIZENZEN.md` (Ampelliste, Checkliste) |
+| P9.4 SampleVoice + Projektfeld + UI | offen (nächste Welle) |
